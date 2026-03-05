@@ -6,3 +6,14 @@ requests
 git+https://github.com/justingeeslin/Real-Time-Object-Measurement.git
 # Uncomment to use a Postgres database.
 #psycopg[binary]
+asgiref==3.11.1
+certifi==2026.2.25
+charset-normalizer==3.4.4
+idna==3.11
+numpy==2.2.6
+ObjectMeasurer @ git+https://github.com/justingeeslin/Real-Time-Object-Measurement.git@591b735700406a04875c6366c02628c22298500c
+opencv-python==4.13.0.92
+packaging==26.0
+sqlparse==0.5.5
+typing_extensions==4.15.0
+urllib3==2.6.3
