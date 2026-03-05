@@ -12,14 +12,19 @@ import os
 LETTER_MM = (215.9, 279.4)  # 8.5in x 11in
 
 def index(request):
-    image_url = "https://raw.githubusercontent.com/justingeeslin/Real-Time-Object-Measurement/main/test-images/ucard-one-off-axis/ucard-one-off-axis.jpg"
-    image_name = "ucard-one-off-axis.jpg"
+    image_url = request.GET.get("url")
 
-    # import requests
+    if not image_url:
+        from urllib.parse import quote
+        example_image_url = "https://raw.githubusercontent.com/justingeeslin/Real-Time-Object-Measurement/main/test-images/ucard-one-off-axis/ucard-one-off-axis.jpg"
+        encoded = quote(image_url, safe="")
+        return HttpResponse(
+            f"<h2>Error: Missing 'url' query parameter.</h2>"
+            f"<p>Example usage: <a href=\"/?url={encoded}\">/?url={example_image_url}</a></p>",
+            status=400
+        )
+
     import numpy as np
-    # import cv2
-
-    # url = "https://example.com/image.jpg"
 
     r = requests.get(image_url)
 
