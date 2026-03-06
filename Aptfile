@@ -1,3 +1,5 @@
+python3-opencv
+libgl1
 libsm6
 libxrender1
 libfontconfig1
