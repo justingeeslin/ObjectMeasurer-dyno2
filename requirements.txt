@@ -11,7 +11,8 @@ certifi==2026.2.25
 charset-normalizer==3.4.4
 idna==3.11
 numpy==2.2.6
-opencv-python==4.13.0.92
+#opencv-python==4.13.0.92
+opencv-python-headless==4.2.0.32
 packaging==26.0
 sqlparse==0.5.5
 typing_extensions==4.15.0
