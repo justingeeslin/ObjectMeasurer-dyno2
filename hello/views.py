@@ -1,5 +1,6 @@
 import requests
 from django.http import HttpResponse
+from django.http import JsonResponse
 from django.shortcuts import render
 
 from .models import Greeting
@@ -12,6 +13,9 @@ import os
 LETTER_MM = (215.9, 279.4)  # 8.5in x 11in
 
 def index(request):
+    return HttpResponse(f"<h2>hi</h2")
+
+def measure(request):
     image_url = request.GET.get("url")
 
     if not image_url:
@@ -39,7 +43,14 @@ def index(request):
     # Get the measurements (in cm)
     measurements = measurer.measure(img)
 
-    return HttpResponse(f'<h1>{[(m.width_cm, m.height_cm) for m in measurements]}</h1>')
+    data = {
+        "measurements": measurements
+    }
+
+    if measurer.debug['object_contour_svg'] is not None:
+        data["svg"] = measurer.debug['object_contour_svg']
+
+    return JsonResponse(data)
 
 def db(request):
     # If you encounter errors visiting the `/db/` page on the example app, check that:
