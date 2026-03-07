@@ -21,7 +21,7 @@ from django.urls import path
 import hello.views
 
 urlpatterns = [
-    path("", hello.views.index, name="index"),
+    # path("", hello.views.index, name="index"),
     path("", hello.views.measure, name="measure"),
     # path("db/", hello.views.db, name="db"),
     # Uncomment this and the entry in `INSTALLED_APPS` if you wish to use the Django admin feature:
