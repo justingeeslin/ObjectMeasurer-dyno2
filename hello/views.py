@@ -47,7 +47,7 @@ def measure(request):
         "measurements": measurements
     }
 
-    if measurer.debug['object_contour_svg'] is not None:
+    if 'object_contour_svg' in measurer.debug:
         data["svg"] = measurer.debug['object_contour_svg']
 
     return JsonResponse(data)
