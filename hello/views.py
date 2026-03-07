@@ -43,8 +43,11 @@ def measure(request):
     # Get the measurements (in cm)
     measurements = measurer.measure(img)
 
+    width_cm, height_cm = measurements[0].width_cm, measurements[0].height_cm
+
     data = {
-        "measurements": measurements
+        "height": height_cm,
+        "width": width_cm,
     }
 
     if 'object_contour_svg' in measurer.debug:
