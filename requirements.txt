@@ -10,7 +10,7 @@ asgiref==3.11.1
 certifi==2026.2.25
 charset-normalizer==3.4.4
 idna==3.11
-numpy==2.2.6
+numpy==2.4.4
 #opencv-python==4.13.0.92
 opencv-python-headless==4.13.0.92
 packaging==26.0
