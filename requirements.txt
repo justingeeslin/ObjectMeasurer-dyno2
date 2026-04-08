@@ -8,7 +8,7 @@ git+https://github.com/justingeeslin/Real-Time-Object-Measurement.git@develop
 #psycopg[binary]
 asgiref==3.11.1
 certifi==2026.2.25
-charset-normalizer==3.4.4
+charset-normalizer==3.4.7
 idna==3.11
 numpy==2.2.6
 #opencv-python==4.13.0.92
