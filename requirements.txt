@@ -9,7 +9,7 @@ git+https://github.com/justingeeslin/Real-Time-Object-Measurement.git@develop
 asgiref==3.11.1
 certifi==2026.2.25
 charset-normalizer==3.4.4
-idna==3.11
+idna==3.13
 numpy==2.2.6
 #opencv-python==4.13.0.92
 opencv-python-headless==4.13.0.92
