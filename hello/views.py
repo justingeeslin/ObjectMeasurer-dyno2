@@ -11,6 +11,7 @@ import os
 # SHORT SIDE / X-AXIS FIRST
 # A4_MM = (210.0, 297.0)
 LETTER_MM = (215.9, 279.4)  # 8.5in x 11in
+PORTRAIT_POSTER_BOARD_MM = (561.975, 711.2)
 
 def index(request):
     return HttpResponse(f"<h2>hi</h2")
@@ -39,7 +40,7 @@ def measure(request):
     img = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
 
     # Construct the ObjectMeasurer with the size of the reference object
-    measurer = ObjectMeasurer(reference_size_mm=LETTER_MM)
+    measurer = ObjectMeasurer(reference_size_mm=PORTRAIT_POSTER_BOARD_MM)
     # Get the measurements (in cm)
     measurements = measurer.measure(img)
 
