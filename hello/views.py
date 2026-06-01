@@ -43,6 +43,7 @@ def measure(request):
         if not r.ok:
             return JsonResponse(
                 {
+                    "request_url": image_url,
                     "error": "Image server rejected download",
                     "remote_status": r.status_code,
                     "remote_content_type": r.headers.get("Content-Type"),
