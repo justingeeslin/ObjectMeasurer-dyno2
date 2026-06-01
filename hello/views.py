@@ -30,10 +30,27 @@ def measure(request):
         )
 
     import numpy as np
-
     try:
-        r = requests.get(image_url, timeout=15)
-        r.raise_for_status()
+        r = requests.get(
+            image_url,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "image/*,*/*;q=0.8",
+            },
+            timeout=15,
+        )
+
+        if not r.ok:
+            return JsonResponse(
+                {
+                    "error": "Image server rejected download",
+                    "remote_status": r.status_code,
+                    "remote_content_type": r.headers.get("Content-Type"),
+                    "remote_body": r.text[:500],
+                },
+                status=400,
+            )
+
     except requests.exceptions.RequestException as exc:
         return JsonResponse(
             {"error": "Could not download image", "details": str(exc)},
