@@ -22,7 +22,7 @@ def measure(request):
     if not image_url:
         from urllib.parse import quote
         example_image_url = "https://raw.githubusercontent.com/justingeeslin/Real-Time-Object-Measurement/main/test-images/ucard-one-off-axis/ucard-one-off-axis.jpg"
-        encoded = quote(image_url, safe="")
+        encoded = quote(example_image_url, safe="")
         return HttpResponse(
             f"<h2>Error: Missing 'url' query parameter.</h2>"
             f"<p>Example usage: <a href=\"/?url={encoded}\">/?url={example_image_url}</a></p>",
@@ -31,7 +31,14 @@ def measure(request):
 
     import numpy as np
 
-    r = requests.get(image_url)
+    try:
+        r = requests.get(image_url, timeout=15)
+        r.raise_for_status()
+    except requests.exceptions.RequestException as exc:
+        return JsonResponse(
+            {"error": "Could not download image", "details": str(exc)},
+            status=400,
+        )
 
     # Convert bytes to numpy array
     image_array = np.frombuffer(r.content, np.uint8)
@@ -39,10 +46,29 @@ def measure(request):
     # Decode image with OpenCV
     img = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
 
+    if img is None:
+        return JsonResponse(
+            {"error": "Downloaded file is not a valid image"},
+            status=400,
+        )
+
     # Construct the ObjectMeasurer with the size of the reference object
     measurer = ObjectMeasurer(reference_size_mm=PORTRAIT_POSTER_BOARD_MM)
-    # Get the measurements (in cm)
-    measurements = measurer.measure(img)
+
+    try:
+        # Get the measurements (in cm)
+        measurements = measurer.measure(img)
+    except Exception as exc:
+        return JsonResponse(
+            {"error": "Image measurement failed", "details": str(exc)},
+            status=500,
+        )
+
+    if not measurements:
+        return JsonResponse(
+            {"error": "No measurable object found in image"},
+            status=422,
+        )
 
     width_cm, height_cm = measurements[0].width_cm, measurements[0].height_cm
 
