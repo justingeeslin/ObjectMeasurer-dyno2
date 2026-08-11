@@ -1,20 +1,81 @@
+import math
+
+import cv2
 import requests
 from django.http import HttpResponse
 from django.http import JsonResponse
 from django.shortcuts import render
+from ObjectMeasurer import ObjectMeasurer
 
 from .models import Greeting
-import cv2
-from ObjectMeasurer import ObjectMeasurer
-import os
 
 # SHORT SIDE / X-AXIS FIRST
 # A4_MM = (210.0, 297.0)
 LETTER_MM = (215.9, 279.4)  # 8.5in x 11in
 PORTRAIT_POSTER_BOARD_MM = (561.975, 711.2)
+REFERENCE_WIDTH_PARAM = "reference_width_mm"
+REFERENCE_HEIGHT_PARAM = "reference_height_mm"
+REFERENCE_SIZE_PARAM = "reference_size_mm"
+
+
+class BadReferenceSize(ValueError):
+    pass
+
+
+def _parse_positive_float(value, param_name):
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        raise BadReferenceSize(f"'{param_name}' must be a number.")
+
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise BadReferenceSize(
+            f"'{param_name}' must be a finite number greater than 0."
+        )
+
+    return parsed
+
+
+def get_reference_size_mm(query_params):
+    compact_size = query_params.get(REFERENCE_SIZE_PARAM)
+    width = query_params.get(REFERENCE_WIDTH_PARAM)
+    height = query_params.get(REFERENCE_HEIGHT_PARAM)
+
+    if compact_size is not None:
+        if width is not None or height is not None:
+            raise BadReferenceSize(
+                "Use either 'reference_size_mm' or "
+                "'reference_width_mm'/'reference_height_mm', not both."
+            )
+
+        parts = [part.strip() for part in compact_size.split(",")]
+        if len(parts) != 2 or not all(parts):
+            raise BadReferenceSize(
+                "'reference_size_mm' must be two comma-separated numbers: width,height."
+            )
+
+        return (
+            _parse_positive_float(parts[0], REFERENCE_SIZE_PARAM),
+            _parse_positive_float(parts[1], REFERENCE_SIZE_PARAM),
+        )
+
+    if width is None and height is None:
+        return PORTRAIT_POSTER_BOARD_MM
+
+    if width is None or height is None:
+        raise BadReferenceSize(
+            "'reference_width_mm' and 'reference_height_mm' must be provided together."
+        )
+
+    return (
+        _parse_positive_float(width, REFERENCE_WIDTH_PARAM),
+        _parse_positive_float(height, REFERENCE_HEIGHT_PARAM),
+    )
+
 
 def index(request):
     return HttpResponse(f"<h2>hi</h2")
+
 
 def measure(request):
     image_url = request.GET.get("url")
@@ -27,6 +88,14 @@ def measure(request):
             f"<h2>Error: Missing 'url' query parameter.</h2>"
             f"<p>Example usage: <a href=\"/?url={encoded}\">/?url={example_image_url}</a></p>",
             status=400
+        )
+
+    try:
+        reference_size_mm = get_reference_size_mm(request.GET)
+    except BadReferenceSize as exc:
+        return JsonResponse(
+            {"error": "Invalid reference object dimensions", "details": str(exc)},
+            status=400,
         )
 
     import numpy as np
@@ -71,7 +140,7 @@ def measure(request):
         )
 
     # Construct the ObjectMeasurer with the size of the reference object
-    measurer = ObjectMeasurer(reference_size_mm=PORTRAIT_POSTER_BOARD_MM)
+    measurer = ObjectMeasurer(reference_size_mm=reference_size_mm)
 
     try:
         # Get the measurements (in cm)
@@ -99,6 +168,7 @@ def measure(request):
         data["svg"] = measurer.debug['object_contour_svg']
 
     return JsonResponse(data)
+
 
 def db(request):
     # If you encounter errors visiting the `/db/` page on the example app, check that:

@@ -7,6 +7,31 @@ This application supports the tutorials for both the [Cedar and Fir generations]
 - [Getting Started on Heroku with Python](https://devcenter.heroku.com/articles/getting-started-with-python)
 - [Getting Started on Heroku Fir with Python](https://devcenter.heroku.com/articles/getting-started-with-python-fir)
 
+## Measurement endpoint
+
+The root endpoint measures the first detectable object in an image:
+
+```term
+$ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg"
+```
+
+By default, the reference object is treated as portrait poster board
+(`561.975mm x 711.2mm`). To supply custom reference dimensions, pass width and
+height in millimeters:
+
+```term
+$ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&reference_width_mm=215.9&reference_height_mm=279.4"
+```
+
+You can also pass both dimensions as one comma-separated value:
+
+```term
+$ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&reference_size_mm=215.9,279.4"
+```
+
+The endpoint returns measured `width` and `height` in centimeters. Custom
+reference dimensions must be finite positive numbers.
+
 ## Deploying to Heroku
 
 Using resources for this example app counts towards your usage. [Delete your app](https://devcenter.heroku.com/articles/heroku-cli-commands#heroku-apps-destroy) and [database](https://devcenter.heroku.com/articles/heroku-postgresql#removing-the-add-on) as soon as you are done experimenting to control costs.

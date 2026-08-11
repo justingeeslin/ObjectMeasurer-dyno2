@@ -1,26 +1,135 @@
-from django.test import TestCase
+from types import SimpleNamespace
+from unittest.mock import patch
 
-# Create your tests here.
+from django.test import SimpleTestCase
+
+from .views import PORTRAIT_POSTER_BOARD_MM
 
 
-# Note: The tests below rely upon static assets (for the rendered templates), so require that either:
-# 1. The static assets have been processed - ie: `./manage.py collectstatic` has been run.
-# 2. Or, the tests are run in debug mode (which means WhiteNoise will use auto-refresh mode),
-#    using: `./manage.py test --debug-mode`
-class ExampleTest(TestCase):
-    def test_index_page(self):
-        response = self.client.get("/")
-        self.assertContains(
-            response, "Getting Started with Python on Heroku", status_code=200
+class MeasureEndpointTest(SimpleTestCase):
+    def configure_successful_measurement(self, requests_get, imdecode, object_measurer):
+        requests_get.return_value = SimpleNamespace(
+            ok=True,
+            content=b"image-bytes",
+            headers={},
+            status_code=200,
+            text="",
+        )
+        imdecode.return_value = object()
+
+        measurer = object_measurer.return_value
+        measurer.debug = {}
+        measurer.measure.return_value = [
+            SimpleNamespace(width_cm=12.3, height_cm=45.6),
+        ]
+        return measurer
+
+    @patch("hello.views.ObjectMeasurer")
+    @patch("hello.views.cv2.imdecode")
+    @patch("hello.views.requests.get")
+    def test_measure_uses_default_reference_size(
+        self, requests_get, imdecode, object_measurer
+    ):
+        self.configure_successful_measurement(requests_get, imdecode, object_measurer)
+
+        response = self.client.get("/", {"url": "https://example.com/photo.jpg"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"height": 45.6, "width": 12.3})
+        object_measurer.assert_called_once_with(
+            reference_size_mm=PORTRAIT_POSTER_BOARD_MM
         )
 
-    def test_db_page(self):
-        # Each time the page is requested, the number of recorded greetings increases.
+    @patch("hello.views.ObjectMeasurer")
+    @patch("hello.views.cv2.imdecode")
+    @patch("hello.views.requests.get")
+    def test_measure_accepts_reference_width_and_height_mm(
+        self, requests_get, imdecode, object_measurer
+    ):
+        self.configure_successful_measurement(requests_get, imdecode, object_measurer)
 
-        first_response = self.client.get("/db/")
-        self.assertEqual(first_response.status_code, 200)
-        self.assertEqual(len(first_response.context["greetings"]), 1)
+        response = self.client.get(
+            "/",
+            {
+                "url": "https://example.com/photo.jpg",
+                "reference_width_mm": "100.5",
+                "reference_height_mm": "200.25",
+            },
+        )
 
-        second_response = self.client.get("/db/")
-        self.assertEqual(second_response.status_code, 200)
-        self.assertEqual(len(second_response.context["greetings"]), 2)
+        self.assertEqual(response.status_code, 200)
+        object_measurer.assert_called_once_with(reference_size_mm=(100.5, 200.25))
+
+    @patch("hello.views.ObjectMeasurer")
+    @patch("hello.views.cv2.imdecode")
+    @patch("hello.views.requests.get")
+    def test_measure_accepts_compact_reference_size_mm(
+        self, requests_get, imdecode, object_measurer
+    ):
+        self.configure_successful_measurement(requests_get, imdecode, object_measurer)
+
+        response = self.client.get(
+            "/",
+            {
+                "url": "https://example.com/photo.jpg",
+                "reference_size_mm": "215.9,279.4",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        object_measurer.assert_called_once_with(reference_size_mm=(215.9, 279.4))
+
+    @patch("hello.views.requests.get")
+    def test_measure_rejects_partial_reference_dimensions(self, requests_get):
+        response = self.client.get(
+            "/",
+            {
+                "url": "https://example.com/photo.jpg",
+                "reference_width_mm": "100",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["error"],
+            "Invalid reference object dimensions",
+        )
+        self.assertIn("provided together", response.json()["details"])
+        requests_get.assert_not_called()
+
+    @patch("hello.views.requests.get")
+    def test_measure_rejects_non_positive_reference_dimensions(self, requests_get):
+        response = self.client.get(
+            "/",
+            {
+                "url": "https://example.com/photo.jpg",
+                "reference_size_mm": "0,279.4",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["error"],
+            "Invalid reference object dimensions",
+        )
+        self.assertIn("greater than 0", response.json()["details"])
+        requests_get.assert_not_called()
+
+    @patch("hello.views.requests.get")
+    def test_measure_rejects_non_finite_reference_dimensions(self, requests_get):
+        response = self.client.get(
+            "/",
+            {
+                "url": "https://example.com/photo.jpg",
+                "reference_width_mm": "nan",
+                "reference_height_mm": "279.4",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["error"],
+            "Invalid reference object dimensions",
+        )
+        self.assertIn("finite number", response.json()["details"])
+        requests_get.assert_not_called()
