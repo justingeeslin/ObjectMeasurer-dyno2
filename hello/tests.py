@@ -1,6 +1,8 @@
+import base64
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import numpy as np
 from django.test import SimpleTestCase
 
 from .views import PORTRAIT_POSTER_BOARD_MM
@@ -38,6 +40,44 @@ class MeasureEndpointTest(SimpleTestCase):
         self.assertEqual(response.json(), {"height": 45.6, "width": 12.3})
         object_measurer.assert_called_once_with(
             reference_size_mm=PORTRAIT_POSTER_BOARD_MM
+        )
+
+    @patch("hello.views.ObjectMeasurer")
+    @patch("hello.views.cv2.imdecode")
+    @patch("hello.views.requests.get")
+    def test_measure_returns_base64_debug_images_when_requested(
+        self, requests_get, imdecode, object_measurer
+    ):
+        measurer = self.configure_successful_measurement(
+            requests_get, imdecode, object_measurer
+        )
+        measurer.debug = {
+            "imgWarp": np.zeros((2, 3, 3), dtype=np.uint8),
+            "not_an_image": "debug text",
+        }
+
+        response = self.client.get(
+            "/",
+            {
+                "url": "https://example.com/photo.jpg",
+                "debug_images": "1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        debug_images = response.json()["debug_images"]
+        self.assertEqual(set(debug_images), {"imgWarp"})
+
+        image_payload = debug_images["imgWarp"]
+        self.assertEqual(image_payload["mime_type"], "image/png")
+        self.assertEqual(image_payload["encoding"], "base64")
+        self.assertEqual(image_payload["width"], 3)
+        self.assertEqual(image_payload["height"], 2)
+        self.assertEqual(image_payload["shape"], [2, 3, 3])
+        self.assertEqual(image_payload["dtype"], "uint8")
+        self.assertEqual(
+            base64.b64decode(image_payload["data"])[:8],
+            b"\x89PNG\r\n\x1a\n",
         )
 
     @patch("hello.views.ObjectMeasurer")

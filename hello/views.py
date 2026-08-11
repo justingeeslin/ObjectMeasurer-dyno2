@@ -1,6 +1,8 @@
+import base64
 import math
 
 import cv2
+import numpy as np
 import requests
 from django.http import HttpResponse
 from django.http import JsonResponse
@@ -16,6 +18,10 @@ PORTRAIT_POSTER_BOARD_MM = (561.975, 711.2)
 REFERENCE_WIDTH_PARAM = "reference_width_mm"
 REFERENCE_HEIGHT_PARAM = "reference_height_mm"
 REFERENCE_SIZE_PARAM = "reference_size_mm"
+DEBUG_IMAGES_PARAM = "debug_images"
+DEBUG_IMAGE_FORMAT = ".png"
+DEBUG_IMAGE_MIME_TYPE = "image/png"
+TRUE_QUERY_VALUES = {"1", "true", "yes", "on"}
 
 
 class BadReferenceSize(ValueError):
@@ -73,6 +79,49 @@ def get_reference_size_mm(query_params):
     )
 
 
+def _query_param_enabled(query_params, param_name):
+    value = query_params.get(param_name)
+    if value is None:
+        return False
+
+    return str(value).strip().lower() in TRUE_QUERY_VALUES
+
+
+def _is_debug_image(value):
+    if not isinstance(value, np.ndarray):
+        return False
+
+    if value.ndim == 2:
+        return True
+
+    return value.ndim == 3 and value.shape[2] in (1, 3, 4)
+
+
+def encode_debug_images(debug):
+    images = {}
+
+    for name, value in debug.items():
+        if not _is_debug_image(value):
+            continue
+
+        ok, encoded = cv2.imencode(DEBUG_IMAGE_FORMAT, value)
+        if not ok:
+            continue
+
+        height, width = value.shape[:2]
+        images[name] = {
+            "mime_type": DEBUG_IMAGE_MIME_TYPE,
+            "encoding": "base64",
+            "data": base64.b64encode(encoded.tobytes()).decode("ascii"),
+            "width": int(width),
+            "height": int(height),
+            "shape": [int(dimension) for dimension in value.shape],
+            "dtype": str(value.dtype),
+        }
+
+    return images
+
+
 def index(request):
     return HttpResponse(f"<h2>hi</h2")
 
@@ -98,7 +147,6 @@ def measure(request):
             status=400,
         )
 
-    import numpy as np
     try:
         r = requests.get(
             image_url,
@@ -166,6 +214,9 @@ def measure(request):
 
     if 'object_contour_svg' in measurer.debug:
         data["svg"] = measurer.debug['object_contour_svg']
+
+    if _query_param_enabled(request.GET, DEBUG_IMAGES_PARAM):
+        data["debug_images"] = encode_debug_images(measurer.debug)
 
     return JsonResponse(data)
 

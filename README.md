@@ -32,6 +32,18 @@ $ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&referen
 The endpoint returns measured `width` and `height` in centimeters. Custom
 reference dimensions must be finite positive numbers.
 
+To include the OpenCV debug images collected by `ObjectMeasurer.measure()`, pass
+`debug_images=1`:
+
+```term
+$ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&debug_images=1"
+```
+
+The response will include a `debug_images` object. Each entry contains a PNG
+image encoded as base64 plus its `mime_type`, `width`, `height`, `shape`, and
+`dtype`. Clients can render an image with a data URL such as
+`data:image/png;base64,<data>`.
+
 ## Deploying to Heroku
 
 Using resources for this example app counts towards your usage. [Delete your app](https://devcenter.heroku.com/articles/heroku-cli-commands#heroku-apps-destroy) and [database](https://devcenter.heroku.com/articles/heroku-postgresql#removing-the-add-on) as soon as you are done experimenting to control costs.
