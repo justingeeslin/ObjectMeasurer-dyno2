@@ -190,33 +190,36 @@ def measure(request):
     # Construct the ObjectMeasurer with the size of the reference object
     measurer = ObjectMeasurer(reference_size_mm=reference_size_mm)
 
+    data = {}
+
     try:
         # Get the measurements (in cm)
         measurements = measurer.measure(img)
     except Exception as exc:
+        data["error"] = "Image measurement failed"
+        data["details"] = str(exc)
         return JsonResponse(
-            {"error": "Image measurement failed", "details": str(exc)},
+            data,
             status=500,
         )
-
-    if not measurements:
-        return JsonResponse(
-            {"error": "No measurable object found in image"},
-            status=422,
-        )
-
-    width_cm, height_cm = measurements[0].width_cm, measurements[0].height_cm
-
-    data = {
-        "height": height_cm,
-        "width": width_cm,
-    }
 
     if 'object_contour_svg' in measurer.debug:
         data["svg"] = measurer.debug['object_contour_svg']
 
     if _query_param_enabled(request.GET, DEBUG_IMAGES_PARAM):
         data["debug_images"] = encode_debug_images(measurer.debug)
+
+    if not measurements:
+        data["error"] = "No measurable object found in image"
+        return JsonResponse(
+            data,
+            status=422,
+        )
+
+    width_cm, height_cm = measurements[0].width_cm, measurements[0].height_cm
+
+    data["height"] = height_cm
+    data["width"] = width_cm
 
     return JsonResponse(data)
 
