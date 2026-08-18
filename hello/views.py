@@ -1,4 +1,5 @@
 import base64
+import inspect
 import math
 import mimetypes
 from pathlib import Path
@@ -133,6 +134,27 @@ def build_debug_image_request_path():
     return get_debug_image_root() / uuid.uuid4().hex
 
 
+def object_measurer_supports_saved_debug_images():
+    try:
+        parameters = inspect.signature(ObjectMeasurer).parameters
+    except (TypeError, ValueError):
+        return False
+
+    if any(parameter.kind == parameter.VAR_KEYWORD for parameter in parameters.values()):
+        return True
+
+    return {"debug_path", "save_debug_images"}.issubset(parameters)
+
+
+def _safe_debug_image_name(name):
+    safe_name = "".join(
+        character if character.isalnum() or character in "-_." else "_"
+        for character in str(name)
+    ).strip("._")
+
+    return safe_name or "debug_image"
+
+
 def _debug_image_url_path(relative_path):
     prefix = settings.DEBUG_IMAGE_URL.strip("/")
     encoded_path = quote(relative_path.as_posix(), safe="/")
@@ -180,6 +202,51 @@ def encode_saved_debug_image_urls(debug, request):
         )
 
     return urls
+
+
+def save_debug_image_arrays(debug, output_dir):
+    output_dir = Path(output_dir)
+    saved_images = []
+
+    for name, value in debug.items():
+        if name == "debug_images" or not _is_debug_image(value):
+            continue
+
+        filename = f"{len(saved_images)}_{_safe_debug_image_name(name)}{DEBUG_IMAGE_FORMAT}"
+        out_path = output_dir / filename
+
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            saved = cv2.imwrite(str(out_path), value)
+        except Exception:
+            saved = False
+
+        saved_images.append(
+            {
+                "name": str(name),
+                "path": str(out_path),
+                "saved": bool(saved),
+            }
+        )
+
+    return saved_images
+
+
+def ensure_debug_images_saved(debug, debug_path):
+    if not debug_path:
+        return
+
+    saved_images = [
+        image
+        for image in debug.get("debug_images", [])
+        if isinstance(image, dict) and image.get("saved")
+    ]
+    if saved_images:
+        return
+
+    fallback_images = save_debug_image_arrays(debug, debug_path)
+    if fallback_images:
+        debug["debug_images"] = fallback_images
 
 
 def _is_debug_image(value):
@@ -382,6 +449,7 @@ def index(request):
 
 def measure(request):
     image_url = request.GET.get("url")
+    wants_debug_image_urls = _query_param_enabled(request.GET, DEBUG_IMAGE_URLS_PARAM)
 
     if not image_url:
         return index(request)
@@ -440,8 +508,15 @@ def measure(request):
         )
 
     # Construct the ObjectMeasurer with the same options used by direct tests.
-    if _query_param_enabled(request.GET, DEBUG_IMAGE_URLS_PARAM):
-        measurement_kwargs["debug_path"] = str(build_debug_image_request_path())
+    debug_image_request_path = None
+    if wants_debug_image_urls:
+        debug_image_request_path = build_debug_image_request_path()
+
+    if (
+        debug_image_request_path is not None
+        and object_measurer_supports_saved_debug_images()
+    ):
+        measurement_kwargs["debug_path"] = str(debug_image_request_path)
         measurement_kwargs["save_debug_images"] = True
 
     measurer = ObjectMeasurer(**measurement_kwargs)
@@ -454,11 +529,16 @@ def measure(request):
     except Exception as exc:
         data["error"] = "Image measurement failed"
         data["details"] = str(exc)
+        if wants_debug_image_urls:
+            ensure_debug_images_saved(measurer.debug, debug_image_request_path)
         add_debug_response_fields(data, measurer.debug, request.GET, request)
         return JsonResponse(
             data,
             status=500,
         )
+
+    if wants_debug_image_urls:
+        ensure_debug_images_saved(debug, debug_image_request_path)
 
     add_debug_response_fields(data, debug, request.GET, request)
 

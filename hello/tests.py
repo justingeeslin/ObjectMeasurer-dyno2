@@ -195,6 +195,59 @@ class MeasureEndpointTest(SimpleTestCase):
                     b"debug-image-bytes",
                 )
 
+    @patch("hello.views.object_measurer_supports_saved_debug_images")
+    @patch("hello.views.uuid.uuid4")
+    @patch("hello.views.ObjectMeasurer")
+    @patch("hello.views.cv2.imdecode")
+    @patch("hello.views.requests.get")
+    def test_measure_saves_debug_image_urls_when_measurer_has_no_save_hook(
+        self, requests_get, imdecode, object_measurer, uuid4, supports_saved_images
+    ):
+        measurer = self.configure_successful_measurement(
+            requests_get, imdecode, object_measurer
+        )
+        uuid4.return_value = SimpleNamespace(hex="fallback-token")
+        supports_saved_images.return_value = False
+        measurer.debug = {
+            "status": "ok",
+            "imgWarp": np.zeros((2, 3, 3), dtype=np.uint8),
+        }
+
+        with tempfile.TemporaryDirectory() as debug_root:
+            with override_settings(DEBUG_IMAGE_ROOT=debug_root):
+                response = self.client.get(
+                    "/",
+                    {
+                        "url": "https://example.com/photo.jpg",
+                        "debug_image_urls": "1",
+                    },
+                )
+
+                self.assertEqual(response.status_code, 200)
+                object_measurer.assert_called_once_with(
+                    reference_size_mm=PORTRAIT_POSTER_BOARD_MM,
+                )
+
+                debug_image_urls = response.json()["debug_image_urls"]
+                self.assertEqual(len(debug_image_urls), 1)
+                self.assertEqual(debug_image_urls[0]["name"], "imgWarp")
+                self.assertEqual(debug_image_urls[0]["filename"], "0_imgWarp.png")
+                self.assertEqual(debug_image_urls[0]["mime_type"], "image/png")
+                self.assertEqual(
+                    debug_image_urls[0]["url"],
+                    "http://testserver/debug-images/fallback-token/0_imgWarp.png",
+                )
+
+                image_response = self.client.get(
+                    urlparse(debug_image_urls[0]["url"]).path
+                )
+                self.assertEqual(image_response.status_code, 200)
+                self.assertEqual(image_response.headers["Content-Type"], "image/png")
+                self.assertEqual(
+                    b"".join(image_response.streaming_content)[:8],
+                    b"\x89PNG\r\n\x1a\n",
+                )
+
     @patch("hello.views.ObjectMeasurer")
     @patch("hello.views.cv2.imdecode")
     @patch("hello.views.requests.get")
