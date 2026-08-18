@@ -1,10 +1,11 @@
 import base64
 import math
+from pathlib import Path
+from urllib.parse import urlencode
 
 import cv2
 import numpy as np
 import requests
-from django.http import HttpResponse
 from django.http import JsonResponse
 from django.shortcuts import render
 from ObjectMeasurer import ObjectMeasurer
@@ -18,10 +19,15 @@ PORTRAIT_POSTER_BOARD_MM = (561.975, 711.2)
 REFERENCE_WIDTH_PARAM = "reference_width_mm"
 REFERENCE_HEIGHT_PARAM = "reference_height_mm"
 REFERENCE_SIZE_PARAM = "reference_size_mm"
+DEBUG_PARAM = "debug"
 DEBUG_IMAGES_PARAM = "debug_images"
 DEBUG_IMAGE_FORMAT = ".png"
 DEBUG_IMAGE_MIME_TYPE = "image/png"
 TRUE_QUERY_VALUES = {"1", "true", "yes", "on"}
+EXAMPLE_IMAGE_URL = (
+    "https://raw.githubusercontent.com/justingeeslin/Real-Time-Object-Measurement/"
+    "main/test-images/ucard-one-off-axis/ucard-one-off-axis.jpg"
+)
 
 
 class BadReferenceSize(ValueError):
@@ -122,22 +128,127 @@ def encode_debug_images(debug):
     return images
 
 
+def _serialize_debug_value(value):
+    if isinstance(value, np.generic):
+        return _serialize_debug_value(value.item())
+
+    if isinstance(value, np.ndarray):
+        height, width = value.shape[:2] if value.ndim >= 2 else (None, None)
+        serialized = {
+            "type": "image" if _is_debug_image(value) else "ndarray",
+            "shape": [int(dimension) for dimension in value.shape],
+            "dtype": str(value.dtype),
+        }
+        if height is not None and width is not None:
+            serialized["width"] = int(width)
+            serialized["height"] = int(height)
+        return serialized
+
+    if isinstance(value, dict):
+        return {str(key): _serialize_debug_value(item) for key, item in value.items()}
+
+    if isinstance(value, (list, tuple)):
+        return [_serialize_debug_value(item) for item in value]
+
+    if isinstance(value, Path):
+        return str(value)
+
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+
+    return str(value)
+
+
+def encode_debug(debug):
+    return {str(name): _serialize_debug_value(value) for name, value in debug.items()}
+
+
+def add_debug_response_fields(data, debug, query_params):
+    if "object_contour_svg" in debug:
+        data["svg"] = debug["object_contour_svg"]
+
+    if (
+        _query_param_enabled(query_params, DEBUG_PARAM)
+        or _query_param_enabled(query_params, DEBUG_IMAGES_PARAM)
+    ):
+        data["debug"] = encode_debug(debug)
+
+    if _query_param_enabled(query_params, DEBUG_IMAGES_PARAM):
+        data["debug_images"] = encode_debug_images(debug)
+
+
+def _build_example_link(request, title, description, params):
+    query_string = urlencode(params)
+    href = request.build_absolute_uri(f"/?{query_string}")
+
+    return {
+        "title": title,
+        "description": description,
+        "href": href,
+        "path": f"/?{query_string}",
+        "curl": f'curl "{href}"',
+    }
+
+
+def build_index_examples(request):
+    return [
+        _build_example_link(
+            request,
+            "Measure an object",
+            "Uses the default portrait poster-board reference size.",
+            {"url": EXAMPLE_IMAGE_URL},
+        ),
+        _build_example_link(
+            request,
+            "Use a letter-size reference",
+            "Overrides the reference object dimensions in millimeters.",
+            {
+                "url": EXAMPLE_IMAGE_URL,
+                REFERENCE_SIZE_PARAM: f"{LETTER_MM[0]},{LETTER_MM[1]}",
+            },
+        ),
+        _build_example_link(
+            request,
+            "Include structured debug data",
+            "Adds metadata, trace information, and image descriptors to the JSON.",
+            {
+                "url": EXAMPLE_IMAGE_URL,
+                DEBUG_PARAM: "1",
+            },
+        ),
+        _build_example_link(
+            request,
+            "Include debug images",
+            "Adds base64-encoded PNG debug images that clients can render.",
+            {
+                "url": EXAMPLE_IMAGE_URL,
+                DEBUG_IMAGES_PARAM: "1",
+            },
+        ),
+    ]
+
+
 def index(request):
-    return HttpResponse(f"<h2>hi</h2")
+    return render(
+        request,
+        "index.html",
+        {
+            "examples": build_index_examples(request),
+            "example_image_url": EXAMPLE_IMAGE_URL,
+            "default_reference_size": PORTRAIT_POSTER_BOARD_MM,
+            "letter_reference_size": LETTER_MM,
+        },
+    )
 
 
 def measure(request):
     image_url = request.GET.get("url")
 
     if not image_url:
-        from urllib.parse import quote
-        example_image_url = "https://raw.githubusercontent.com/justingeeslin/Real-Time-Object-Measurement/main/test-images/ucard-one-off-axis/ucard-one-off-axis.jpg"
-        encoded = quote(example_image_url, safe="")
-        return HttpResponse(
-            f"<h2>Error: Missing 'url' query parameter.</h2>"
-            f"<p>Example usage: <a href=\"/?url={encoded}\">/?url={example_image_url}</a></p>",
-            status=400
-        )
+        return index(request)
 
     try:
         reference_size_mm = get_reference_size_mm(request.GET)
@@ -198,16 +309,13 @@ def measure(request):
     except Exception as exc:
         data["error"] = "Image measurement failed"
         data["details"] = str(exc)
+        add_debug_response_fields(data, measurer.debug, request.GET)
         return JsonResponse(
             data,
             status=500,
         )
 
-    if 'object_contour_svg' in measurer.debug:
-        data["svg"] = measurer.debug['object_contour_svg']
-
-    if _query_param_enabled(request.GET, DEBUG_IMAGES_PARAM):
-        data["debug_images"] = encode_debug_images(measurer.debug)
+    add_debug_response_fields(data, measurer.debug, request.GET)
 
     if not measurements:
         data["error"] = "No measurable object found in image"

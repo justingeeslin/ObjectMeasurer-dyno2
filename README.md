@@ -9,7 +9,12 @@ This application supports the tutorials for both the [Cedar and Fir generations]
 
 ## Measurement endpoint
 
-The root endpoint measures the first detectable object in an image:
+Visiting the root endpoint in a browser shows an index page with sample links
+for measurement, custom reference sizes, structured debug data, and debug
+images.
+
+When the `url` query parameter is present, the root endpoint measures the first
+detectable object in an image:
 
 ```term
 $ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg"
@@ -32,6 +37,18 @@ $ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&referen
 The endpoint returns measured `width` and `height` in centimeters. Custom
 reference dimensions must be finite positive numbers.
 
+To include the structured diagnostics collected by `ObjectMeasurer.measure()`,
+pass `debug=1`:
+
+```term
+$ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&debug=1"
+```
+
+The response will include a `debug` object with fields such as `status`,
+`errors`, `trace`, `page_detection`, and measurement metadata when they are
+provided by `ObjectMeasurer`. NumPy arrays are represented as compact
+`type`/`shape`/`dtype` descriptors instead of raw pixel data.
+
 To include the OpenCV debug images collected by `ObjectMeasurer.measure()`, pass
 `debug_images=1`:
 
@@ -42,7 +59,8 @@ $ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&debug_i
 The response will include a `debug_images` object. Each entry contains a PNG
 image encoded as base64 plus its `mime_type`, `width`, `height`, `shape`, and
 `dtype`. Clients can render an image with a data URL such as
-`data:image/png;base64,<data>`.
+`data:image/png;base64,<data>`. Requests with `debug_images=1` also include the
+structured `debug` object.
 
 ## Deploying to Heroku
 

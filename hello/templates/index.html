@@ -1,60 +1,79 @@
 {% extends "base.html" %}
-{% load static %}
 
 {% block content %}
-
-<div class="jumbotron text-center">
-  <div class="container">
-    <a href="/" class="lang-logo">
-      <img src="{% static 'lang-logo.png'%}">
-    </a>
-    <h1>Getting Started with Python on Heroku</h1>
-    <p>This is a sample Python application deployed to Heroku. It's a reasonably simple app - but a good foundation for understanding how to get the most out of the Heroku platform.</p>
-    <a type="button" class="btn btn-lg btn-default" href="https://devcenter.heroku.com/articles/getting-started-with-python"><span class="glyphicon glyphicon-flash"></span> Getting Started on Heroku with Python</a>
-    <a type="button" class="btn btn-lg btn-default" href="https://devcenter.heroku.com/articles/getting-started-with-python-fir"><span class="glyphicon glyphicon-flash"></span> Getting Started on Heroku Fir with Python</a>
-    <a type="button" class="btn btn-lg btn-primary" href="https://github.com/heroku/python-getting-started"><span class="glyphicon glyphicon-download"></span> Source on GitHub</a>
-  </div>
-</div>
-<div class="container">
-  <div class="lead">
-    To deploy your own copy, and learn the fundamentals of the Heroku platform, head over to either of the following tutorials:
-    <ul>
-      <li><a href="https://devcenter.heroku.com/articles/getting-started-with-python" class="alert-link">Getting Started on Heroku with Python</a></li>
-      <li><a href="https://devcenter.heroku.com/articles/getting-started-with-python-fir" class="alert-link">Getting Started on Heroku Fir with Python</a></li>
+<main class="page">
+  <section class="hero" aria-labelledby="page-title">
+    <p class="eyebrow">Ready for requests</p>
+    <h1 id="page-title">Measure objects from an image URL.</h1>
+    <p class="hero__copy">
+      Send a public image URL to the root endpoint and receive object dimensions
+      in centimeters. Use the examples below to try the standard response,
+      custom reference sizes, structured debug data, and debug images.
+    </p>
+    <ul class="hero__meta">
+      <li class="pill">Default reference: {{ default_reference_size.0 }}mm x {{ default_reference_size.1 }}mm</li>
+      <li class="pill">Letter reference: {{ letter_reference_size.0 }}mm x {{ letter_reference_size.1 }}mm</li>
+      <li class="pill">Response format: JSON</li>
     </ul>
-  </div>
-  <hr />
-  <div class="row">
-    <div class="col-md-6">
-      <h3><span class="glyphicon glyphicon-info-sign"></span> How this sample app works</h3>
-      <ul>
-        <li>This app was deployed to Heroku using Git.</li>
-        <li>When Heroku received the source code, it fetched all the dependencies in <a href="https://github.com/heroku/python-getting-started/blob/main/requirements.txt">requirements.txt</a>, creating a deployable build artifact.</li>
-        <li>The platform then spins up a dyno, a lightweight container that provides an isolated environment in which the build artifact can be mounted and executed.</li>
-        <li>You can scale your app, manage it, and deploy over <a href="https://addons.heroku.com/">150 add-on services</a>, from the Dashboard or CLI.</li>
+  </section>
+
+  <section class="section" aria-labelledby="examples-title">
+    <h2 id="examples-title">Sample Links</h2>
+    <div class="example-grid">
+      {% for example in examples %}
+        <article class="example-card">
+          <h3>{{ example.title }}</h3>
+          <p>{{ example.description }}</p>
+          <a class="example-card__link" href="{{ example.href }}">Open example</a>
+          <pre><code>{{ example.path }}</code></pre>
+          <pre><code>{{ example.curl }}</code></pre>
+        </article>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="section details-grid" aria-labelledby="details-title">
+    <div>
+      <h2 id="details-title">Query Parameters</h2>
+      <ul class="info-list">
+        <li><code>url</code> is required for measurement and should point to a public image.</li>
+        <li><code>reference_size_mm=width,height</code> sets the reference object size in one value.</li>
+        <li><code>reference_width_mm</code> and <code>reference_height_mm</code> can be used together instead.</li>
+        <li><code>debug=1</code> includes structured diagnostic metadata without raw image bytes.</li>
+        <li><code>debug_images=1</code> includes structured debug data plus base64 PNG debug images.</li>
       </ul>
     </div>
-    <div class="col-md-6">
-      <h3><span class="glyphicon glyphicon-link"></span> Next Steps</h3>
-      <ul>
-        <li>If you are following the <a href="https://devcenter.heroku.com/articles/getting-started-with-python">Getting Started on Heroku with Python</a> or <a href="https://devcenter.heroku.com/articles/getting-started-with-python-fir">Getting Started on Heroku Fir with Python</a> guide, then please head back to the tutorial and follow the next steps!</li>
-      </ul>
-      <h3><span class="glyphicon glyphicon-link"></span> Helpful Links</h3>
-      <ul>
-        <li><a href="https://www.heroku.com/home">Heroku</a></li>
-        <li><a href="https://devcenter.heroku.com/">Heroku Dev Center</a></li>
-        <li><a href="https://devcenter.heroku.com/articles/getting-started-with-python">Getting Started on Heroku with Python</a></li>
-        <li><a href="https://devcenter.heroku.com/articles/getting-started-with-python-fir">Getting Started on Heroku Fir with Python</a></li>
-        <li><a href="https://devcenter.heroku.com/categories/python">Python articles on the Heroku Dev Center</a></li>
-      </ul>
-    </div>
-  </div>
-  <div class="row" style="margin-top:1em">
-    <div class="col-md-12">
-      <p class="alert alert-info" role="alert">
-        Please do work through the Getting Started guide, even if you do know how to build such an application. The guide covers the basics of working with Heroku, and will familiarize you with all the concepts you need in order to build and deploy your own apps.
+
+    <div class="debug-swatch">
+      <h2>Debug Images Example</h2>
+      <p>
+        The debug-image response is designed for browser clients and inspection
+        tools. Render the image data with <code>data:image/png;base64,&lt;data&gt;</code>.
       </p>
+      <pre><code>{
+  "width": 12.3,
+  "height": 45.6,
+  "debug_images": {
+    "imgWarp": {
+      "mime_type": "image/png",
+      "encoding": "base64",
+      "data": "iVBORw0KGgo...",
+      "width": 640,
+      "height": 480,
+      "shape": [480, 640, 3],
+      "dtype": "uint8"
+    }
+  }
+}</code></pre>
     </div>
-  </div>
-</div>
+  </section>
+
+  <section class="section" aria-labelledby="source-title">
+    <h2 id="source-title">Sample Image</h2>
+    <p>
+      The examples use
+      <code class="sample-image-url">{{ example_image_url }}</code>.
+    </p>
+  </section>
+</main>
 {% endblock %}
