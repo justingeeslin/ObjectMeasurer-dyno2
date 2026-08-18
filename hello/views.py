@@ -19,6 +19,7 @@ PORTRAIT_POSTER_BOARD_MM = (561.975, 711.2)
 REFERENCE_WIDTH_PARAM = "reference_width_mm"
 REFERENCE_HEIGHT_PARAM = "reference_height_mm"
 REFERENCE_SIZE_PARAM = "reference_size_mm"
+SCALE_PARAM = "scale"
 DEBUG_PARAM = "debug"
 DEBUG_IMAGES_PARAM = "debug_images"
 DEBUG_IMAGE_FORMAT = ".png"
@@ -34,6 +35,10 @@ class BadReferenceSize(ValueError):
     pass
 
 
+class BadMeasurementOption(ValueError):
+    pass
+
+
 def _parse_positive_float(value, param_name):
     try:
         parsed = float(value)
@@ -44,6 +49,18 @@ def _parse_positive_float(value, param_name):
         raise BadReferenceSize(
             f"'{param_name}' must be a finite number greater than 0."
         )
+
+    return parsed
+
+
+def _parse_positive_int(value, param_name):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise BadMeasurementOption(f"'{param_name}' must be an integer.")
+
+    if parsed <= 0:
+        raise BadMeasurementOption(f"'{param_name}' must be greater than 0.")
 
     return parsed
 
@@ -83,6 +100,16 @@ def get_reference_size_mm(query_params):
         _parse_positive_float(width, REFERENCE_WIDTH_PARAM),
         _parse_positive_float(height, REFERENCE_HEIGHT_PARAM),
     )
+
+
+def get_measurement_kwargs(query_params):
+    kwargs = {"reference_size_mm": get_reference_size_mm(query_params)}
+
+    scale = query_params.get(SCALE_PARAM)
+    if scale is not None:
+        kwargs["scale"] = _parse_positive_int(scale, SCALE_PARAM)
+
+    return kwargs
 
 
 def _query_param_enabled(query_params, param_name):
@@ -180,6 +207,29 @@ def add_debug_response_fields(data, debug, query_params):
         data["debug_images"] = encode_debug_images(debug)
 
 
+def serialize_measurement(measurement):
+    serialized = {
+        "height": measurement.height_cm,
+        "width": measurement.width_cm,
+    }
+
+    bbox = getattr(measurement, "bbox", None)
+    if bbox is not None:
+        serialized["bbox"] = [int(value) for value in bbox]
+
+    return serialized
+
+
+def measure_with_debug(measurer, img):
+    result = measurer.measure(img, return_debug=True)
+
+    if isinstance(result, tuple) and len(result) == 2:
+        measurements, debug = result
+        return measurements, debug or {}
+
+    return result, getattr(measurer, "debug", {})
+
+
 def _build_example_link(request, title, description, params):
     query_string = urlencode(params)
     href = request.build_absolute_uri(f"/?{query_string}")
@@ -251,10 +301,15 @@ def measure(request):
         return index(request)
 
     try:
-        reference_size_mm = get_reference_size_mm(request.GET)
+        measurement_kwargs = get_measurement_kwargs(request.GET)
     except BadReferenceSize as exc:
         return JsonResponse(
             {"error": "Invalid reference object dimensions", "details": str(exc)},
+            status=400,
+        )
+    except BadMeasurementOption as exc:
+        return JsonResponse(
+            {"error": "Invalid measurement option", "details": str(exc)},
             status=400,
         )
 
@@ -298,14 +353,14 @@ def measure(request):
             status=400,
         )
 
-    # Construct the ObjectMeasurer with the size of the reference object
-    measurer = ObjectMeasurer(reference_size_mm=reference_size_mm)
+    # Construct the ObjectMeasurer with the same options used by direct tests.
+    measurer = ObjectMeasurer(**measurement_kwargs)
 
     data = {}
 
     try:
         # Get the measurements (in cm)
-        measurements = measurer.measure(img)
+        measurements, debug = measure_with_debug(measurer, img)
     except Exception as exc:
         data["error"] = "Image measurement failed"
         data["details"] = str(exc)
@@ -315,7 +370,7 @@ def measure(request):
             status=500,
         )
 
-    add_debug_response_fields(data, measurer.debug, request.GET)
+    add_debug_response_fields(data, debug, request.GET)
 
     if not measurements:
         data["error"] = "No measurable object found in image"
@@ -328,6 +383,9 @@ def measure(request):
 
     data["height"] = height_cm
     data["width"] = width_cm
+    data["measurements"] = [
+        serialize_measurement(measurement) for measurement in measurements
+    ]
 
     return JsonResponse(data)
 

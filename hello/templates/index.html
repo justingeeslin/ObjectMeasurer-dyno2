@@ -39,6 +39,7 @@
         <li><code>url</code> is required for measurement and should point to a public image.</li>
         <li><code>reference_size_mm=width,height</code> sets the reference object size in one value.</li>
         <li><code>reference_width_mm</code> and <code>reference_height_mm</code> can be used together instead.</li>
+        <li><code>scale</code> passes the same scale value used by <code>ObjectMeasurer</code>.</li>
         <li><code>debug=1</code> includes structured diagnostic metadata without raw image bytes.</li>
         <li><code>debug_images=1</code> includes structured debug data plus base64 PNG debug images.</li>
       </ul>
@@ -53,6 +54,13 @@
       <pre><code>{
   "width": 12.3,
   "height": 45.6,
+  "measurements": [
+    {
+      "width": 12.3,
+      "height": 45.6,
+      "bbox": [10, 20, 120, 80]
+    }
+  ],
   "debug_images": {
     "imgWarp": {
       "mime_type": "image/png",

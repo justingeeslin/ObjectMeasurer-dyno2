@@ -13,8 +13,8 @@ Visiting the root endpoint in a browser shows an index page with sample links
 for measurement, custom reference sizes, structured debug data, and debug
 images.
 
-When the `url` query parameter is present, the root endpoint measures the first
-detectable object in an image:
+When the `url` query parameter is present, the root endpoint measures detectable
+objects in an image:
 
 ```term
 $ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg"
@@ -35,7 +35,15 @@ $ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&referen
 ```
 
 The endpoint returns measured `width` and `height` in centimeters. Custom
-reference dimensions must be finite positive numbers.
+reference dimensions must be finite positive numbers. The top-level `width` and
+`height` mirror the first returned object, and the `measurements` array includes
+every measurement returned by `ObjectMeasurer`.
+
+To use the same scale option accepted by `ObjectMeasurer`, pass `scale`:
+
+```term
+$ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&reference_size_mm=215.9,279.4&scale=2"
+```
 
 To include the structured diagnostics collected by `ObjectMeasurer.measure()`,
 pass `debug=1`:
