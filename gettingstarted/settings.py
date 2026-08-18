@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 import os
 import secrets
+import tempfile
 from pathlib import Path
 
 import dj_database_url
@@ -197,6 +198,14 @@ USE_TZ = True
 
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATIC_URL = "static/"
+
+DEBUG_IMAGE_ROOT = Path(
+    os.environ.get(
+        "DEBUG_IMAGE_ROOT",
+        Path(tempfile.gettempdir()) / "object-measurer-debug-images",
+    )
+)
+DEBUG_IMAGE_URL = "debug-images/"
 
 STORAGES = {
     # Enable WhiteNoise's GZip (and Brotli, if installed) compression of static assets:

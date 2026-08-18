@@ -1,11 +1,13 @@
 import base64
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.parse import urlparse
 
 import cv2
 import numpy as np
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 from ObjectMeasurer import ObjectMeasurer
 
 from .views import PORTRAIT_POSTER_BOARD_MM
@@ -51,6 +53,7 @@ class MeasureEndpointTest(SimpleTestCase):
         self.assertIn("reference_size_mm=215.9%2C279.4", content)
         self.assertIn("debug=1", content)
         self.assertIn("debug_images=1", content)
+        self.assertIn("debug_image_urls=1", content)
         self.assertIn("data:image/png;base64,&lt;data&gt;", content)
         requests_get.assert_not_called()
 
@@ -113,6 +116,84 @@ class MeasureEndpointTest(SimpleTestCase):
             b"\x89PNG\r\n\x1a\n",
         )
         self.assertEqual(response.json()["debug"]["not_an_image"], "debug text")
+
+    @patch("hello.views.uuid.uuid4")
+    @patch("hello.views.ObjectMeasurer")
+    @patch("hello.views.cv2.imdecode")
+    @patch("hello.views.requests.get")
+    def test_measure_returns_saved_debug_image_urls_when_requested(
+        self, requests_get, imdecode, object_measurer, uuid4
+    ):
+        measurer = self.configure_successful_measurement(
+            requests_get, imdecode, object_measurer
+        )
+        uuid4.return_value = SimpleNamespace(hex="debug-token")
+
+        with tempfile.TemporaryDirectory() as debug_root:
+            debug_dir = Path(debug_root) / "debug-token"
+            debug_dir.mkdir()
+            image_path = debug_dir / "0_untitled_warped.jpg"
+            image_path.write_bytes(b"debug-image-bytes")
+            measurer.debug = {
+                "status": "ok",
+                "debug_images": [
+                    {
+                        "name": "warped",
+                        "path": str(image_path),
+                        "saved": True,
+                    },
+                    {
+                        "name": "missing",
+                        "path": str(debug_dir / "missing.jpg"),
+                        "saved": False,
+                    },
+                ],
+            }
+
+            with override_settings(DEBUG_IMAGE_ROOT=debug_root):
+                response = self.client.get(
+                    "/",
+                    {
+                        "url": "https://example.com/photo.jpg",
+                        "debug_image_urls": "1",
+                    },
+                )
+
+                self.assertEqual(response.status_code, 200)
+                object_measurer.assert_called_once_with(
+                    reference_size_mm=PORTRAIT_POSTER_BOARD_MM,
+                    debug_path=str(debug_dir),
+                    save_debug_images=True,
+                )
+
+                payload = response.json()
+                self.assertEqual(payload["debug"]["status"], "ok")
+                self.assertNotIn("debug_images", payload["debug"])
+
+                debug_image_urls = payload["debug_image_urls"]
+                self.assertEqual(len(debug_image_urls), 1)
+                self.assertEqual(
+                    debug_image_urls[0],
+                    {
+                        "name": "warped",
+                        "filename": "0_untitled_warped.jpg",
+                        "mime_type": "image/jpeg",
+                        "url": (
+                            "http://testserver/debug-images/debug-token/"
+                            "0_untitled_warped.jpg"
+                        ),
+                    },
+                )
+
+                image_response = self.client.get(
+                    urlparse(debug_image_urls[0]["url"]).path
+                )
+                self.assertEqual(image_response.status_code, 200)
+                self.assertEqual(image_response.headers["Content-Type"], "image/jpeg")
+                self.assertEqual(
+                    b"".join(image_response.streaming_content),
+                    b"debug-image-bytes",
+                )
 
     @patch("hello.views.ObjectMeasurer")
     @patch("hello.views.cv2.imdecode")

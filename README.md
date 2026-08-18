@@ -70,6 +70,18 @@ image encoded as base64 plus its `mime_type`, `width`, `height`, `shape`, and
 `data:image/png;base64,<data>`. Requests with `debug_images=1` also include the
 structured `debug` object.
 
+To save debug images temporarily and return URLs instead of inline image bytes,
+pass `debug_image_urls=1`:
+
+```term
+$ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&debug_image_urls=1"
+```
+
+The response will include a `debug_image_urls` array with each saved image's
+`name`, `filename`, `mime_type`, and absolute `url`. These files are stored on
+the local dyno filesystem and can disappear when the dyno restarts. Requests
+with `debug_image_urls=1` also include the structured `debug` object.
+
 ## Deploying to Heroku
 
 Using resources for this example app counts towards your usage. [Delete your app](https://devcenter.heroku.com/articles/heroku-cli-commands#heroku-apps-destroy) and [database](https://devcenter.heroku.com/articles/heroku-postgresql#removing-the-add-on) as soon as you are done experimenting to control costs.

@@ -1,12 +1,15 @@
 import base64
 import math
+import mimetypes
 from pathlib import Path
-from urllib.parse import urlencode
+import uuid
+from urllib.parse import quote, urlencode
 
 import cv2
 import numpy as np
 import requests
-from django.http import JsonResponse
+from django.conf import settings
+from django.http import FileResponse, Http404, JsonResponse
 from django.shortcuts import render
 from ObjectMeasurer import ObjectMeasurer
 
@@ -22,8 +25,10 @@ REFERENCE_SIZE_PARAM = "reference_size_mm"
 SCALE_PARAM = "scale"
 DEBUG_PARAM = "debug"
 DEBUG_IMAGES_PARAM = "debug_images"
+DEBUG_IMAGE_URLS_PARAM = "debug_image_urls"
 DEBUG_IMAGE_FORMAT = ".png"
 DEBUG_IMAGE_MIME_TYPE = "image/png"
+SAVED_DEBUG_IMAGE_DEFAULT_MIME_TYPE = "application/octet-stream"
 TRUE_QUERY_VALUES = {"1", "true", "yes", "on"}
 EXAMPLE_IMAGE_URL = (
     "https://raw.githubusercontent.com/justingeeslin/Real-Time-Object-Measurement/"
@@ -120,6 +125,63 @@ def _query_param_enabled(query_params, param_name):
     return str(value).strip().lower() in TRUE_QUERY_VALUES
 
 
+def get_debug_image_root():
+    return Path(settings.DEBUG_IMAGE_ROOT)
+
+
+def build_debug_image_request_path():
+    return get_debug_image_root() / uuid.uuid4().hex
+
+
+def _debug_image_url_path(relative_path):
+    prefix = settings.DEBUG_IMAGE_URL.strip("/")
+    encoded_path = quote(relative_path.as_posix(), safe="/")
+    return f"/{prefix}/{encoded_path}"
+
+
+def _saved_debug_image_relative_path(image_path):
+    root = get_debug_image_root().resolve()
+
+    try:
+        return Path(image_path).resolve().relative_to(root)
+    except (OSError, ValueError):
+        return None
+
+
+def encode_saved_debug_image_urls(debug, request):
+    urls = []
+
+    for image in debug.get("debug_images", []):
+        if not isinstance(image, dict) or not image.get("saved"):
+            continue
+
+        path = image.get("path")
+        if not path:
+            continue
+
+        image_path = Path(path)
+        relative_path = _saved_debug_image_relative_path(image_path)
+        if relative_path is None:
+            continue
+
+        mime_type = (
+            mimetypes.guess_type(str(image_path))[0]
+            or SAVED_DEBUG_IMAGE_DEFAULT_MIME_TYPE
+        )
+        urls.append(
+            {
+                "name": str(image.get("name", "")),
+                "filename": image_path.name,
+                "mime_type": mime_type,
+                "url": request.build_absolute_uri(
+                    _debug_image_url_path(relative_path)
+                ),
+            }
+        )
+
+    return urls
+
+
 def _is_debug_image(value):
     if not isinstance(value, np.ndarray):
         return False
@@ -189,22 +251,37 @@ def _serialize_debug_value(value):
     return str(value)
 
 
-def encode_debug(debug):
-    return {str(name): _serialize_debug_value(value) for name, value in debug.items()}
+def encode_debug(debug, exclude_keys=None):
+    exclude_keys = set(exclude_keys or [])
+    return {
+        str(name): _serialize_debug_value(value)
+        for name, value in debug.items()
+        if str(name) not in exclude_keys
+    }
 
 
-def add_debug_response_fields(data, debug, query_params):
+def add_debug_response_fields(data, debug, query_params, request):
     if "object_contour_svg" in debug:
         data["svg"] = debug["object_contour_svg"]
+
+    wants_debug_image_urls = _query_param_enabled(
+        query_params,
+        DEBUG_IMAGE_URLS_PARAM,
+    )
 
     if (
         _query_param_enabled(query_params, DEBUG_PARAM)
         or _query_param_enabled(query_params, DEBUG_IMAGES_PARAM)
+        or wants_debug_image_urls
     ):
-        data["debug"] = encode_debug(debug)
+        exclude_keys = {"debug_images"} if wants_debug_image_urls else set()
+        data["debug"] = encode_debug(debug, exclude_keys=exclude_keys)
 
     if _query_param_enabled(query_params, DEBUG_IMAGES_PARAM):
         data["debug_images"] = encode_debug_images(debug)
+
+    if wants_debug_image_urls:
+        data["debug_image_urls"] = encode_saved_debug_image_urls(debug, request)
 
 
 def serialize_measurement(measurement):
@@ -276,6 +353,15 @@ def build_index_examples(request):
             {
                 "url": EXAMPLE_IMAGE_URL,
                 DEBUG_IMAGES_PARAM: "1",
+            },
+        ),
+        _build_example_link(
+            request,
+            "Return debug image URLs",
+            "Saves debug images temporarily and returns public URLs for inspection.",
+            {
+                "url": EXAMPLE_IMAGE_URL,
+                DEBUG_IMAGE_URLS_PARAM: "1",
             },
         ),
     ]
@@ -354,6 +440,10 @@ def measure(request):
         )
 
     # Construct the ObjectMeasurer with the same options used by direct tests.
+    if _query_param_enabled(request.GET, DEBUG_IMAGE_URLS_PARAM):
+        measurement_kwargs["debug_path"] = str(build_debug_image_request_path())
+        measurement_kwargs["save_debug_images"] = True
+
     measurer = ObjectMeasurer(**measurement_kwargs)
 
     data = {}
@@ -364,13 +454,13 @@ def measure(request):
     except Exception as exc:
         data["error"] = "Image measurement failed"
         data["details"] = str(exc)
-        add_debug_response_fields(data, measurer.debug, request.GET)
+        add_debug_response_fields(data, measurer.debug, request.GET, request)
         return JsonResponse(
             data,
             status=500,
         )
 
-    add_debug_response_fields(data, debug, request.GET)
+    add_debug_response_fields(data, debug, request.GET, request)
 
     if not measurements:
         data["error"] = "No measurable object found in image"
@@ -388,6 +478,20 @@ def measure(request):
     ]
 
     return JsonResponse(data)
+
+
+def debug_image(request, path):
+    relative_path = Path(path)
+    image_path = get_debug_image_root() / relative_path
+
+    if _saved_debug_image_relative_path(image_path) is None or not image_path.is_file():
+        raise Http404("Debug image not found")
+
+    content_type = (
+        mimetypes.guess_type(str(image_path))[0]
+        or SAVED_DEBUG_IMAGE_DEFAULT_MIME_TYPE
+    )
+    return FileResponse(image_path.open("rb"), content_type=content_type)
 
 
 def db(request):

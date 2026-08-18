@@ -42,6 +42,7 @@
         <li><code>scale</code> passes the same scale value used by <code>ObjectMeasurer</code>.</li>
         <li><code>debug=1</code> includes structured diagnostic metadata without raw image bytes.</li>
         <li><code>debug_images=1</code> includes structured debug data plus base64 PNG debug images.</li>
+        <li><code>debug_image_urls=1</code> saves debug images temporarily and returns public URLs.</li>
       </ul>
     </div>
 
@@ -59,6 +60,14 @@
       "width": 12.3,
       "height": 45.6,
       "bbox": [10, 20, 120, 80]
+    }
+  ],
+  "debug_image_urls": [
+    {
+      "name": "warped",
+      "filename": "2_untitled_warped.jpg",
+      "mime_type": "image/jpeg",
+      "url": "https://example.com/debug-images/abc123/2_untitled_warped.jpg"
     }
   ],
   "debug_images": {
