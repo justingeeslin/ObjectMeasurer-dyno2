@@ -37,15 +37,22 @@ $ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&referen
 The endpoint returns measured `width` and `height` in centimeters. Custom
 reference dimensions must be finite positive numbers. The top-level `width` and
 `height` mirror the first returned object, and the `measurements` array includes
-every measurement returned by `ObjectMeasurer`.
+every measurement returned by the selected measurer.
 
-To use the same scale option accepted by `ObjectMeasurer`, pass `scale`:
+By default, the endpoint uses `ObjectMeasurer`. To use
+`ReferenceSurfaceMeasurer`, pass `measurer=reference_surface`:
+
+```term
+$ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&measurer=reference_surface"
+```
+
+To pass a scale option to the selected measurer, use `scale`:
 
 ```term
 $ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&reference_size_mm=215.9,279.4&scale=2"
 ```
 
-To include the structured diagnostics collected by `ObjectMeasurer.measure()`,
+To include the structured diagnostics collected by the selected measurer,
 pass `debug=1`:
 
 ```term
@@ -54,10 +61,10 @@ $ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&debug=1
 
 The response will include a `debug` object with fields such as `status`,
 `errors`, `trace`, `page_detection`, and measurement metadata when they are
-provided by `ObjectMeasurer`. NumPy arrays are represented as compact
+provided by the selected measurer. NumPy arrays are represented as compact
 `type`/`shape`/`dtype` descriptors instead of raw pixel data.
 
-To include the OpenCV debug images collected by `ObjectMeasurer.measure()`, pass
+To include the OpenCV debug images collected by the selected measurer, pass
 `debug_images=1`:
 
 ```term
@@ -81,6 +88,20 @@ The response will include a `debug_image_urls` array with each saved image's
 `name`, `filename`, `mime_type`, and absolute `url`. These files are stored on
 the local dyno filesystem and can disappear when the dyno restarts. Requests
 with `debug_image_urls=1` also include the structured `debug` object.
+
+## Endpoint end-to-end test
+
+The parameterized endpoint test uses public test-image URLs and runs every image
+through both `ObjectMeasurer` and `ReferenceSurfaceMeasurer`, so it tests the
+deployed HTTP endpoint without calling either measurer directly. Set the
+endpoint URL to enable it:
+
+```term
+$ MEASUREMENT_ENDPOINT_URL=https://example.com/ pytest tests/TestMeasurementEndpoint.py -v
+```
+
+`TEST_IMAGE_BASE_URL` can override the default hosted test-image directory.
+Without `MEASUREMENT_ENDPOINT_URL`, this network-dependent test is skipped.
 
 ## Deploying to Heroku
 

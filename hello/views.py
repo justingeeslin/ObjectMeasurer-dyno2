@@ -14,6 +14,11 @@ from django.http import FileResponse, Http404, JsonResponse
 from django.shortcuts import render
 from ObjectMeasurer import ObjectMeasurer
 
+try:
+    from ReferenceSurfaceMeasurer import ReferenceSurfaceMeasurer
+except ImportError:  # pragma: no cover - optional until requirements are installed
+    ReferenceSurfaceMeasurer = None
+
 from .models import Greeting
 
 # SHORT SIDE / X-AXIS FIRST
@@ -24,6 +29,7 @@ REFERENCE_WIDTH_PARAM = "reference_width_mm"
 REFERENCE_HEIGHT_PARAM = "reference_height_mm"
 REFERENCE_SIZE_PARAM = "reference_size_mm"
 SCALE_PARAM = "scale"
+MEASURER_PARAM = "measurer"
 DEBUG_PARAM = "debug"
 DEBUG_IMAGES_PARAM = "debug_images"
 DEBUG_IMAGE_URLS_PARAM = "debug_image_urls"
@@ -31,6 +37,8 @@ DEBUG_IMAGE_FORMAT = ".png"
 DEBUG_IMAGE_MIME_TYPE = "image/png"
 SAVED_DEBUG_IMAGE_DEFAULT_MIME_TYPE = "application/octet-stream"
 TRUE_QUERY_VALUES = {"1", "true", "yes", "on"}
+OBJECT_MEASURER_NAME = "object"
+REFERENCE_SURFACE_MEASURER_NAME = "reference_surface"
 EXAMPLE_IMAGE_URL = (
     "https://raw.githubusercontent.com/justingeeslin/Real-Time-Object-Measurement/"
     "main/test-images/ucard-one-off-axis/ucard-one-off-axis.jpg"
@@ -118,6 +126,38 @@ def get_measurement_kwargs(query_params):
     return kwargs
 
 
+def get_measurer_name(query_params):
+    value = query_params.get(MEASURER_PARAM, OBJECT_MEASURER_NAME)
+    normalized = str(value).strip().lower().replace("-", "_")
+    compact = normalized.replace("_", "")
+
+    if compact in {"default", "legacy", "object", "objectmeasurer"}:
+        return OBJECT_MEASURER_NAME
+
+    if compact in {
+        "reference",
+        "referencesurface",
+        "referencesurfacemeasurer",
+    }:
+        return REFERENCE_SURFACE_MEASURER_NAME
+
+    raise BadMeasurementOption(
+        "'measurer' must be either 'object' or 'reference_surface'."
+    )
+
+
+def get_measurer_class(measurer_name):
+    if measurer_name == OBJECT_MEASURER_NAME:
+        return ObjectMeasurer
+
+    if ReferenceSurfaceMeasurer is None:
+        raise BadMeasurementOption(
+            "'measurer=reference_surface' requires ReferenceSurfaceMeasurer to be installed."
+        )
+
+    return ReferenceSurfaceMeasurer
+
+
 def _query_param_enabled(query_params, param_name):
     value = query_params.get(param_name)
     if value is None:
@@ -134,9 +174,9 @@ def build_debug_image_request_path():
     return get_debug_image_root() / uuid.uuid4().hex
 
 
-def object_measurer_supports_saved_debug_images():
+def measurer_supports_saved_debug_images(measurer_class):
     try:
-        parameters = inspect.signature(ObjectMeasurer).parameters
+        parameters = inspect.signature(measurer_class).parameters
     except (TypeError, ValueError):
         return False
 
@@ -192,7 +232,7 @@ def encode_saved_debug_image_urls(debug, request):
         )
         urls.append(
             {
-                "name": str(image.get("name", "")),
+                "name": str(image.get("name", image.get("label", ""))),
                 "filename": image_path.name,
                 "mime_type": mime_type,
                 "url": request.build_absolute_uri(
@@ -397,6 +437,15 @@ def build_index_examples(request):
         ),
         _build_example_link(
             request,
+            "Use ReferenceSurfaceMeasurer",
+            "Measures with the alternate reference-surface implementation.",
+            {
+                "url": EXAMPLE_IMAGE_URL,
+                MEASURER_PARAM: REFERENCE_SURFACE_MEASURER_NAME,
+            },
+        ),
+        _build_example_link(
+            request,
             "Use a letter-size reference",
             "Overrides the reference object dimensions in millimeters.",
             {
@@ -455,6 +504,8 @@ def measure(request):
         return index(request)
 
     try:
+        measurer_name = get_measurer_name(request.GET)
+        measurer_class = get_measurer_class(measurer_name)
         measurement_kwargs = get_measurement_kwargs(request.GET)
     except BadReferenceSize as exc:
         return JsonResponse(
@@ -514,14 +565,14 @@ def measure(request):
 
     if (
         debug_image_request_path is not None
-        and object_measurer_supports_saved_debug_images()
+        and measurer_supports_saved_debug_images(measurer_class)
     ):
         measurement_kwargs["debug_path"] = str(debug_image_request_path)
         measurement_kwargs["save_debug_images"] = True
 
-    measurer = ObjectMeasurer(**measurement_kwargs)
+    measurer = measurer_class(**measurement_kwargs)
 
-    data = {}
+    data = {"measurer": measurer_name}
 
     try:
         # Get the measurements (in cm)

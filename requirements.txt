@@ -4,6 +4,7 @@ dj-database-url>=3,<4
 whitenoise>=6,<7
 requests
 git+https://github.com/justingeeslin/Real-Time-Object-Measurement.git@develop
+git+https://github.com/justingeeslin/ReferenceSurfaceMeasurer.git
 # Uncomment to use a Postgres database.
 #psycopg[binary]
 asgiref==3.11.1

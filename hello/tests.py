@@ -8,18 +8,8 @@ from urllib.parse import urlparse
 import cv2
 import numpy as np
 from django.test import SimpleTestCase, override_settings
-from ObjectMeasurer import ObjectMeasurer
 
 from .views import PORTRAIT_POSTER_BOARD_MM
-
-LETTER_MM = (215.9, 279.4)
-ODDBALL_BLACK_POSTER_BOARD_MM = (508, 752.475)
-REPO_ROOT = Path(__file__).resolve().parents[1]
-TEST_IMAGES_ROOT = REPO_ROOT / "test-images"
-
-
-def fixture_path(slug, filename):
-    return TEST_IMAGES_ROOT / slug / filename
 
 
 class MeasureEndpointTest(SimpleTestCase):
@@ -51,6 +41,7 @@ class MeasureEndpointTest(SimpleTestCase):
         self.assertIn("Object Measurement API", content)
         self.assertIn("Sample Links", content)
         self.assertIn("reference_size_mm=215.9%2C279.4", content)
+        self.assertIn("measurer=reference_surface", content)
         self.assertIn("debug=1", content)
         self.assertIn("debug_images=1", content)
         self.assertIn("debug_image_urls=1", content)
@@ -76,6 +67,41 @@ class MeasureEndpointTest(SimpleTestCase):
         )
         object_measurer.assert_called_once_with(
             reference_size_mm=PORTRAIT_POSTER_BOARD_MM
+        )
+
+    @patch("hello.views.ReferenceSurfaceMeasurer")
+    @patch("hello.views.ObjectMeasurer")
+    @patch("hello.views.cv2.imdecode")
+    @patch("hello.views.requests.get")
+    def test_measure_accepts_reference_surface_measurer(
+        self,
+        requests_get,
+        imdecode,
+        object_measurer,
+        reference_surface_measurer,
+    ):
+        self.configure_successful_measurement(
+            requests_get,
+            imdecode,
+            reference_surface_measurer,
+        )
+
+        response = self.client.get(
+            "/",
+            {
+                "url": "https://example.com/photo.jpg",
+                "measurer": "reference_surface",
+                "reference_size_mm": "215.9,279.4",
+                "scale": "2",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["measurer"], "reference_surface")
+        object_measurer.assert_not_called()
+        reference_surface_measurer.assert_called_once_with(
+            reference_size_mm=(215.9, 279.4),
+            scale=2,
         )
 
     @patch("hello.views.ObjectMeasurer")
@@ -195,7 +221,7 @@ class MeasureEndpointTest(SimpleTestCase):
                     b"debug-image-bytes",
                 )
 
-    @patch("hello.views.object_measurer_supports_saved_debug_images")
+    @patch("hello.views.measurer_supports_saved_debug_images")
     @patch("hello.views.uuid.uuid4")
     @patch("hello.views.ObjectMeasurer")
     @patch("hello.views.cv2.imdecode")
@@ -435,6 +461,21 @@ class MeasureEndpointTest(SimpleTestCase):
         requests_get.assert_not_called()
 
     @patch("hello.views.requests.get")
+    def test_measure_rejects_invalid_measurer(self, requests_get):
+        response = self.client.get(
+            "/",
+            {
+                "url": "https://example.com/photo.jpg",
+                "measurer": "mystery",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Invalid measurement option")
+        self.assertIn("measurer", response.json()["details"])
+        requests_get.assert_not_called()
+
+    @patch("hello.views.requests.get")
     def test_measure_rejects_non_finite_reference_dimensions(self, requests_get):
         response = self.client.get(
             "/",
@@ -467,98 +508,3 @@ class MeasureEndpointTest(SimpleTestCase):
         self.assertEqual(response.json()["error"], "Invalid measurement option")
         self.assertIn("greater than 0", response.json()["details"])
         requests_get.assert_not_called()
-
-    @patch("hello.views.requests.get")
-    def test_endpoint_matches_object_measurer_for_real_images(self, requests_get):
-        cases = [
-            (
-                "ucard-one",
-                fixture_path("ucard-one", "ucard-one.jpg"),
-                LETTER_MM,
-                1,
-            ),
-            (
-                "ucard-two-off-axis",
-                fixture_path("ucard-two-off-axis", "ucard-two-off-axis.jpg"),
-                LETTER_MM,
-                1,
-            ),
-            (
-                "goldy",
-                fixture_path("goldy", "goldy.jpg"),
-                ODDBALL_BLACK_POSTER_BOARD_MM,
-                1,
-            ),
-            (
-                "cherokee",
-                fixture_path("cherokee", "cherokee.jpg"),
-                ODDBALL_BLACK_POSTER_BOARD_MM,
-                1,
-            ),
-            (
-                "ucard-one-scale-two",
-                fixture_path("ucard-one", "ucard-one.jpg"),
-                LETTER_MM,
-                2,
-            ),
-        ]
-
-        for slug, image_path, reference_size_mm, scale in cases:
-            with self.subTest(slug=slug):
-                img = cv2.imread(str(image_path))
-                self.assertIsNotNone(img)
-
-                direct_measurer = ObjectMeasurer(
-                    scale=scale,
-                    reference_size_mm=reference_size_mm,
-                )
-                direct_measurer.slug = slug
-                expected_measurements, expected_debug = direct_measurer.measure(
-                    img,
-                    return_debug=True,
-                )
-                self.assertTrue(expected_measurements)
-                self.assertEqual(expected_debug["status"], "ok")
-
-                requests_get.return_value = SimpleNamespace(
-                    ok=True,
-                    content=image_path.read_bytes(),
-                    headers={"Content-Type": "image/jpeg"},
-                    status_code=200,
-                    text="",
-                )
-
-                response = self.client.get(
-                    "/",
-                    {
-                        "url": f"https://example.com/{image_path.name}",
-                        "reference_size_mm": (
-                            f"{reference_size_mm[0]},{reference_size_mm[1]}"
-                        ),
-                        "scale": str(scale),
-                        "debug": "1",
-                    },
-                )
-
-                self.assertEqual(response.status_code, 200)
-                payload = response.json()
-                self.assertEqual(payload["debug"]["status"], "ok")
-                self.assertEqual(
-                    len(payload["measurements"]),
-                    len(expected_measurements),
-                )
-                self.assertAlmostEqual(
-                    payload["width"],
-                    expected_measurements[0].width_cm,
-                )
-                self.assertAlmostEqual(
-                    payload["height"],
-                    expected_measurements[0].height_cm,
-                )
-
-                for actual, expected in zip(
-                    payload["measurements"],
-                    expected_measurements,
-                ):
-                    self.assertAlmostEqual(actual["width"], expected.width_cm)
-                    self.assertAlmostEqual(actual["height"], expected.height_cm)
