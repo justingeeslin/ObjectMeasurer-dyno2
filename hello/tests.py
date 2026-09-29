@@ -335,6 +335,62 @@ class MeasureEndpointTest(SimpleTestCase):
     @patch("hello.views.ObjectMeasurer")
     @patch("hello.views.cv2.imdecode")
     @patch("hello.views.requests.get")
+    def test_measure_wraps_object_contour_path_as_svg_document(
+        self, requests_get, imdecode, object_measurer
+    ):
+        measurer = self.configure_successful_measurement(
+            requests_get, imdecode, object_measurer
+        )
+        measurer.debug = {
+            "object_contour_svg": "M 10 20 L 30 20 L 30 40 Z",
+            "imgWarp": np.zeros((60, 80, 3), dtype=np.uint8),
+        }
+
+        response = self.client.get("/", {"url": "https://example.com/photo.jpg"})
+
+        self.assertEqual(response.status_code, 200)
+        raw_path = "M 10 20 L 30 20 L 30 40 Z"
+        svg = response.json()["svg"]
+        self.assertNotEqual(svg, raw_path)
+        self.assertTrue(svg.startswith("<svg "))
+        self.assertTrue(svg.endswith("</svg>"))
+        self.assertIn('viewBox="0 0 80 60"', svg)
+        self.assertIn(f'<path d="{raw_path}"', svg)
+
+    @patch("hello.views.ObjectMeasurer")
+    @patch("hello.views.cv2.imdecode")
+    @patch("hello.views.requests.get")
+    def test_measure_returns_wrapped_contour_svg_in_debug_payload(
+        self, requests_get, imdecode, object_measurer
+    ):
+        measurer = self.configure_successful_measurement(
+            requests_get, imdecode, object_measurer
+        )
+        measurer.debug = {
+            "object_contour_svg": "M 10 20 L 30 20 L 30 40 Z",
+            "imgWarp": np.zeros((60, 80, 3), dtype=np.uint8),
+        }
+
+        response = self.client.get(
+            "/",
+            {
+                "url": "https://example.com/photo.jpg",
+                "debug": "1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["debug"]["object_contour_svg"], payload["svg"])
+        self.assertTrue(payload["debug"]["object_contour_svg"].startswith("<svg "))
+        self.assertIn(
+            'viewBox="0 0 80 60"',
+            payload["debug"]["object_contour_svg"],
+        )
+
+    @patch("hello.views.ObjectMeasurer")
+    @patch("hello.views.cv2.imdecode")
+    @patch("hello.views.requests.get")
     def test_measure_includes_debug_on_measurement_error_when_requested(
         self, requests_get, imdecode, object_measurer
     ):

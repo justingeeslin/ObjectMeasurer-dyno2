@@ -1,8 +1,10 @@
 import base64
+import html
 import inspect
 import math
 import mimetypes
 from pathlib import Path
+import re
 import uuid
 from urllib.parse import quote, urlencode
 
@@ -36,6 +38,10 @@ DEBUG_IMAGE_URLS_PARAM = "debug_image_urls"
 DEBUG_IMAGE_FORMAT = ".png"
 DEBUG_IMAGE_MIME_TYPE = "image/png"
 SAVED_DEBUG_IMAGE_DEFAULT_MIME_TYPE = "application/octet-stream"
+OBJECT_CONTOUR_SVG_KEY = "object_contour_svg"
+SVG_NUMBER_PATTERN = re.compile(
+    r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+)
 TRUE_QUERY_VALUES = {"1", "true", "yes", "on"}
 OBJECT_MEASURER_NAME = "object"
 REFERENCE_SURFACE_MEASURER_NAME = "reference_surface"
@@ -299,6 +305,84 @@ def _is_debug_image(value):
     return value.ndim == 3 and value.shape[2] in (1, 3, 4)
 
 
+def _format_svg_number(value):
+    return f"{float(value):g}"
+
+
+def _debug_image_viewbox(debug):
+    image = debug.get("imgWarp")
+    if not _is_debug_image(image):
+        return None
+
+    height, width = image.shape[:2]
+    if height <= 0 or width <= 0:
+        return None
+
+    return (0.0, 0.0, float(width), float(height))
+
+
+def _path_data_viewbox(path_data):
+    values = [
+        float(match.group(0))
+        for match in SVG_NUMBER_PATTERN.finditer(path_data)
+    ]
+    points = list(zip(values[0::2], values[1::2]))
+    if not points:
+        return (0.0, 0.0, 1.0, 1.0)
+
+    x_values = [point[0] for point in points]
+    y_values = [point[1] for point in points]
+    min_x = min(x_values)
+    min_y = min(y_values)
+    width = max(x_values) - min_x
+    height = max(y_values) - min_y
+
+    if width <= 0:
+        width = 1.0
+    if height <= 0:
+        height = 1.0
+
+    return (min_x, min_y, width, height)
+
+
+def build_object_contour_svg(value, debug):
+    if not isinstance(value, str):
+        return value
+
+    contour = value.strip()
+    if not contour:
+        return value
+
+    if contour.lstrip().lower().startswith("<svg"):
+        return value
+
+    min_x, min_y, width, height = _debug_image_viewbox(debug) or _path_data_viewbox(
+        contour
+    )
+    viewbox = " ".join(
+        _format_svg_number(number) for number in (min_x, min_y, width, height)
+    )
+    escaped_path = html.escape(contour, quote=True)
+
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{viewbox}">'
+        f'<path d="{escaped_path}" fill="none" stroke="currentColor" '
+        f'stroke-width="2" vector-effect="non-scaling-stroke"/></svg>'
+    )
+
+
+def normalize_debug_for_response(debug):
+    if OBJECT_CONTOUR_SVG_KEY not in debug:
+        return debug
+
+    normalized = dict(debug)
+    normalized[OBJECT_CONTOUR_SVG_KEY] = build_object_contour_svg(
+        debug[OBJECT_CONTOUR_SVG_KEY],
+        debug,
+    )
+    return normalized
+
+
 def encode_debug_images(debug):
     images = {}
 
@@ -368,8 +452,10 @@ def encode_debug(debug, exclude_keys=None):
 
 
 def add_debug_response_fields(data, debug, query_params, request):
-    if "object_contour_svg" in debug:
-        data["svg"] = debug["object_contour_svg"]
+    debug = normalize_debug_for_response(debug)
+
+    if OBJECT_CONTOUR_SVG_KEY in debug:
+        data["svg"] = debug[OBJECT_CONTOUR_SVG_KEY]
 
     wants_debug_image_urls = _query_param_enabled(
         query_params,
