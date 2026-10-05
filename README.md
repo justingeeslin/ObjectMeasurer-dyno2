@@ -91,17 +91,15 @@ with `debug_image_urls=1` also include the structured `debug` object.
 
 ## Endpoint end-to-end test
 
-The parameterized endpoint test uses public test-image URLs and runs every image
-through both `ObjectMeasurer` and `ReferenceSurfaceMeasurer`, so it tests the
-deployed HTTP endpoint without calling either measurer directly. Set the
-endpoint URL to enable it:
+The parameterized endpoint test starts this project's Django WSGI endpoint on a
+temporary localhost port and serves the checked-in `test-images/` fixtures from
+a second temporary localhost server. It then sends real HTTP requests through
+both `ObjectMeasurer` and `ReferenceSurfaceMeasurer`, so it tests the endpoint
+without calling either measurer directly:
 
 ```term
-$ MEASUREMENT_ENDPOINT_URL=https://example.com/ pytest tests/TestMeasurementEndpoint.py -v
+$ pytest tests/TestMeasurementEndpoint.py -v
 ```
-
-`TEST_IMAGE_BASE_URL` can override the default hosted test-image directory.
-Without `MEASUREMENT_ENDPOINT_URL`, this network-dependent test is skipped.
 
 ## Deploying to Heroku
 
