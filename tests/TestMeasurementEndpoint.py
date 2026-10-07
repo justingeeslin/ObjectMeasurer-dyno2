@@ -139,6 +139,9 @@ def endpoint_url():
 def _measurement_params(
     slug, filename, reference_size_mm, scale, measurer, test_image_base_url
 ):
+    fixture_path = TEST_IMAGES_ROOT / slug / filename
+    assert fixture_path.is_file(), f"Missing local test image fixture: {fixture_path}"
+
     image_url = urljoin(test_image_base_url, f"{slug}/{filename}")
     return {
         "url": image_url,

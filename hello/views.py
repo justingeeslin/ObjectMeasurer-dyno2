@@ -356,9 +356,7 @@ def build_object_contour_svg(value, debug):
     if contour.lstrip().lower().startswith("<svg"):
         return value
 
-    min_x, min_y, width, height = _debug_image_viewbox(debug) or _path_data_viewbox(
-        contour
-    )
+    min_x, min_y, width, height = _path_data_viewbox(contour)
     viewbox = " ".join(
         _format_svg_number(number) for number in (min_x, min_y, width, height)
     )
@@ -479,8 +477,8 @@ def add_debug_response_fields(data, debug, query_params, request):
 
 def serialize_measurement(measurement):
     serialized = {
-        "height": measurement.height_cm,
-        "width": measurement.width_cm,
+        "height": measurement.height_mm,
+        "width": measurement.width_mm,
     }
 
     bbox = getattr(measurement, "bbox", None)
@@ -488,16 +486,6 @@ def serialize_measurement(measurement):
         serialized["bbox"] = [int(value) for value in bbox]
 
     return serialized
-
-
-def measure_with_debug(measurer, img):
-    result = measurer.measure(img, return_debug=True)
-
-    if isinstance(result, tuple) and len(result) == 2:
-        measurements, debug = result
-        return measurements, debug or {}
-
-    return result, getattr(measurer, "debug", {})
 
 
 def _build_example_link(request, title, description, params):
@@ -656,13 +644,17 @@ def measure(request):
         measurement_kwargs["debug_path"] = str(debug_image_request_path)
         measurement_kwargs["save_debug_images"] = True
 
-    measurer = measurer_class(**measurement_kwargs)
+    if measurer_class == "object":
+        measurer = ObjectMeasurer(**measurement_kwargs)
+    else:
+        measurer = ReferenceSurfaceMeasurer(**measurement_kwargs)
 
     data = {"measurer": measurer_name}
 
     try:
-        # Get the measurements (in cm)
-        measurements, debug = measure_with_debug(measurer, img)
+        # Get the measurements (in mm)
+        measurements, debug = measurer.measure(img, return_debug=True)
+
     except Exception as exc:
         data["error"] = "Image measurement failed"
         data["details"] = str(exc)
@@ -686,10 +678,11 @@ def measure(request):
             status=422,
         )
 
-    width_cm, height_cm = measurements[0].width_cm, measurements[0].height_cm
+    print(measurements)
+    width_mm, height_mm = measurements[0].width_mm, measurements[0].height_mm
 
-    data["height"] = height_cm
-    data["width"] = width_cm
+    data["height_mm"] = height_mm
+    data["width_mm"] = width_mm
     data["measurements"] = [
         serialize_measurement(measurement) for measurement in measurements
     ]
