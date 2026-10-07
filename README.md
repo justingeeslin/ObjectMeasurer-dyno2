@@ -7,6 +7,19 @@ This application supports the tutorials for both the [Cedar and Fir generations]
 - [Getting Started on Heroku with Python](https://devcenter.heroku.com/articles/getting-started-with-python)
 - [Getting Started on Heroku Fir with Python](https://devcenter.heroku.com/articles/getting-started-with-python-fir)
 
+## Start server
+
+```bash
+python manage.py runserver
+```
+
+## Development 
+
+Refresh all deps; gets the latest commits.
+```bash
+ pip install --upgrade --force-reinstall --no-cache-dir -r requirements.txt
+```
+
 ## Measurement endpoint
 
 Visiting the root endpoint in a browser shows an index page with sample links

@@ -450,7 +450,6 @@ def encode_debug(debug, exclude_keys=None):
 
 
 def add_debug_response_fields(data, debug, query_params, request):
-    debug = normalize_debug_for_response(debug)
 
     if OBJECT_CONTOUR_SVG_KEY in debug:
         data["svg"] = debug[OBJECT_CONTOUR_SVG_KEY]
@@ -644,12 +643,12 @@ def measure(request):
         measurement_kwargs["debug_path"] = str(debug_image_request_path)
         measurement_kwargs["save_debug_images"] = True
 
-    if measurer_class == "object":
-        measurer = ObjectMeasurer(**measurement_kwargs)
-    else:
-        measurer = ReferenceSurfaceMeasurer(**measurement_kwargs)
+    # if measurer_class == "object":
+    #     measurer = ObjectMeasurer(**measurement_kwargs)
+    # else:
+    measurer = ReferenceSurfaceMeasurer(**measurement_kwargs)
 
-    data = {"measurer": measurer_name}
+    data = {"measurer": "ReferenceSurfaceMeasurer"}
 
     try:
         # Get the measurements (in mm)
@@ -678,9 +677,9 @@ def measure(request):
             status=422,
         )
 
-    print(measurements)
     width_mm, height_mm = measurements[0].width_mm, measurements[0].height_mm
 
+    data["svg"] = debug[OBJECT_CONTOUR_SVG_KEY]
     data["height_mm"] = height_mm
     data["width_mm"] = width_mm
     data["measurements"] = [

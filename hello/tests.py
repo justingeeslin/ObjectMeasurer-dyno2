@@ -354,7 +354,7 @@ class MeasureEndpointTest(SimpleTestCase):
         self.assertNotEqual(svg, raw_path)
         self.assertTrue(svg.startswith("<svg "))
         self.assertTrue(svg.endswith("</svg>"))
-        self.assertIn('viewBox="0 0 80 60"', svg)
+        self.assertIn('viewBox="10 20 20 20"', svg)
         self.assertIn(f'<path d="{raw_path}"', svg)
 
     @patch("hello.views.ObjectMeasurer")
@@ -384,7 +384,7 @@ class MeasureEndpointTest(SimpleTestCase):
         self.assertEqual(payload["debug"]["object_contour_svg"], payload["svg"])
         self.assertTrue(payload["debug"]["object_contour_svg"].startswith("<svg "))
         self.assertIn(
-            'viewBox="0 0 80 60"',
+            'viewBox="10 20 20 20"',
             payload["debug"]["object_contour_svg"],
         )
 
