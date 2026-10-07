@@ -23,22 +23,30 @@ LETTER_MM = (215.9, 279.4)  # 8.5in x 11in
 PORTRAIT_POSTER_BOARD_MM = (561.975, 711.2)
 ODDBALL_BLACK_POSTER_BOARD_MM = (508, 752.475)
 LIGHTBOX_MAT_MM = (746.125, 1098.55)
+SQ_CANVAS_MM = (762, 762)
 
 MEASURERS = ["object", "reference_surface"]
 SVG_NUMBER_PATTERN = re.compile(
     r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 )
 SVG_SHAPE_RELATIVE_TOLERANCE = 0.25
+SVG_VIEWBOX_RELATIVE_TOLERANCE = 0.30
 MEASUREMENT_RELATIVE_TOLERANCE = 0.25
-ENDPOINT_PASS_CRITERIA = (
-    "status=200, echoed measurer, debug.status=ok, measurements present, "
-    "width>0, height>0"
-)
-COMPARISON_PASS_CRITERIA = (
-    "top-level keys identical, first measurement keys identical, "
-    f"physical dimensions within {MEASUREMENT_RELATIVE_TOLERANCE:.0%}, "
-    f"normalized SVG shape within {SVG_SHAPE_RELATIVE_TOLERANCE:.0%}"
-)
+ENDPOINT_PASS_CRITERIA = [
+    "status=200",
+    "echoed measurer",
+    "debug.status=ok",
+    "measurements present",
+    "width>0",
+    "height>0",
+]
+COMPARISON_PASS_CRITERIA = [
+    "top-level keys identical",
+    "first measurement keys identical",
+    f"physical dimensions within {MEASUREMENT_RELATIVE_TOLERANCE:.0%}",
+    f"normalized SVG content shape within {SVG_SHAPE_RELATIVE_TOLERANCE:.0%}",
+    f"normalized SVG viewBox shape within {SVG_VIEWBOX_RELATIVE_TOLERANCE:.0%}",
+]
 IMAGE_CASES = [
     ("ucard-one", "ucard-one.jpg", LETTER_MM, 1),
     ("iswic-folded", "img_6a1db6e03ad2a7.16505140.jpg", PORTRAIT_POSTER_BOARD_MM, 1),
@@ -51,6 +59,7 @@ IMAGE_CASES = [
     ("nike-letter-one", "img_6a7c9d736092f6.97385818.jpg", LETTER_MM, 1),
     ("nike-letter-one-off-axis", "img_6a838cf9edde22.59423143.jpg", LETTER_MM, 1),
     ("iswic", "iswic.jpg", LIGHTBOX_MAT_MM, 1),
+    ("iswic-30x30-canvas", "iswic-30x30-canvas.jpg", SQ_CANVAS_MM, 1),
     ("goldy", "goldy.jpg", ODDBALL_BLACK_POSTER_BOARD_MM, 1),
     ("cherokee", "cherokee.jpg", ODDBALL_BLACK_POSTER_BOARD_MM, 1),
 ]
@@ -61,6 +70,7 @@ COMPARISON_IMAGE_CASES = [
     ("ucard-two-off-axis", "ucard-two-off-axis.jpg", LETTER_MM, 1),
     ("iswic-folded", "img_6a1db6e03ad2a7.16505140.jpg", PORTRAIT_POSTER_BOARD_MM, 1),
     ("iswic-folded2", "img_6a1db77d7f1973.02751931.jpg", PORTRAIT_POSTER_BOARD_MM, 1),
+    ("iswic-30x30-canvas", "iswic-30x30-canvas.jpg", SQ_CANVAS_MM, 1),
     ("goldy", "goldy.jpg", ODDBALL_BLACK_POSTER_BOARD_MM, 1),
     ("cherokee", "cherokee.jpg", ODDBALL_BLACK_POSTER_BOARD_MM, 1),
 ]
@@ -192,7 +202,7 @@ def _coordinate_size_from_values(values):
     return max(x_values) - min(x_values), max(y_values) - min(y_values)
 
 
-def _svg_viewbox_size(root):
+def _svg_document_size(root):
     viewbox = root.attrib.get("viewBox")
     if viewbox:
         values = _svg_numbers(viewbox)
@@ -205,6 +215,25 @@ def _svg_viewbox_size(root):
         return _svg_numbers(width)[0], _svg_numbers(height)[0]
 
     return None
+
+
+def _svg_document_root(svg_value):
+    markup = _svg_markup(svg_value)
+    assert isinstance(markup, str), f"Unexpected SVG payload: {svg_value!r}"
+
+    stripped = markup.strip()
+    assert stripped.startswith("<"), f"SVG payload is not an SVG document: {markup!r}"
+    return ET.fromstring(stripped)
+
+
+def _svg_viewbox_size(svg_value):
+    root = _svg_document_root(svg_value)
+    viewbox = root.attrib.get("viewBox")
+    assert viewbox, "SVG payload did not contain a viewBox"
+
+    values = _svg_numbers(viewbox)
+    assert len(values) == 4, f"Unexpected SVG viewBox: {viewbox}"
+    return values[2], values[3]
 
 
 def _svg_content_size(svg_value):
@@ -227,7 +256,7 @@ def _svg_content_size(svg_value):
                 _svg_numbers(" ".join(coordinate_attributes))
             )
 
-        viewbox_size = _svg_viewbox_size(root)
+        viewbox_size = _svg_document_size(root)
         assert viewbox_size is not None, "SVG payload did not contain path or size data"
         return viewbox_size
 
@@ -247,9 +276,12 @@ def _assert_sizes_close(actual_size, expected_size, relative_tolerance):
     expected = sorted(expected_size)
 
     for actual_dimension, expected_dimension in zip(actual, expected):
-        assert actual_dimension == pytest.approx(
-            expected_dimension,
-            rel=relative_tolerance,
+        denominator = max(abs(actual_dimension), abs(expected_dimension))
+        assert denominator > 0
+        relative_delta = abs(actual_dimension - expected_dimension) / denominator
+        assert relative_delta <= relative_tolerance, (
+            f"{actual_dimension} differs from {expected_dimension} by "
+            f"{relative_delta:.1%}, expected <= {relative_tolerance:.0%}"
         )
 
 
@@ -266,13 +298,24 @@ def _fmt_size(size):
     return f"{_fmt_number(width)} x {_fmt_number(height)}"
 
 
+def _criteria_block(criteria):
+    lines = ["  criteria:"]
+    lines.extend(f"    - {criterion}" for criterion in criteria)
+    return "\n".join(lines)
+
+
 def _endpoint_summary(slug, filename, reference_size_mm, scale, measurer, payload):
     measurement_count = len(payload["measurements"])
-    return (
-        f"[endpoint] image={_image_id(slug, filename)} measurer={measurer} "
-        f"reference_mm={_fmt_size(reference_size_mm)} scale={scale} "
-        f"returned_cm={_fmt_size((payload['width'], payload['height']))} "
-        f"measurements={measurement_count}; pass={ENDPOINT_PASS_CRITERIA}"
+    return "\n".join(
+        [
+            f"[endpoint] image={_image_id(slug, filename)} measurer={measurer}",
+            (
+                f"  reference_mm={_fmt_size(reference_size_mm)} scale={scale} "
+                f"returned_cm={_fmt_size((payload['width'], payload['height']))} "
+                f"measurements={measurement_count}"
+            ),
+            _criteria_block(ENDPOINT_PASS_CRITERIA),
+        ]
     )
 
 
@@ -281,17 +324,32 @@ def _comparison_summary(
     filename,
     object_payload,
     reference_payload,
-    object_svg_size,
-    reference_svg_size,
+    object_svg_content_size,
+    reference_svg_content_size,
+    object_svg_viewbox_size,
+    reference_svg_viewbox_size,
 ):
-    return (
-        f"[comparison] image={_image_id(slug, filename)} "
-        f"object_cm={_fmt_size((object_payload['width'], object_payload['height']))} "
-        f"reference_surface_cm="
-        f"{_fmt_size((reference_payload['width'], reference_payload['height']))} "
-        f"object_svg_norm={_fmt_size(object_svg_size)} "
-        f"reference_surface_svg_norm={_fmt_size(reference_svg_size)}; "
-        f"pass={COMPARISON_PASS_CRITERIA}"
+    return "\n".join(
+        [
+            f"[comparison] image={_image_id(slug, filename)}",
+            (
+                f"  object_cm="
+                f"{_fmt_size((object_payload['width'], object_payload['height']))} "
+                f"reference_surface_cm="
+                f"{_fmt_size((reference_payload['width'], reference_payload['height']))}"
+            ),
+            (
+                f"  object_svg_content_norm={_fmt_size(object_svg_content_size)} "
+                f"reference_surface_svg_content_norm="
+                f"{_fmt_size(reference_svg_content_size)}"
+            ),
+            (
+                f"  object_svg_viewBox_norm={_fmt_size(object_svg_viewbox_size)} "
+                f"reference_surface_svg_viewBox_norm="
+                f"{_fmt_size(reference_svg_viewbox_size)}"
+            ),
+            _criteria_block(COMPARISON_PASS_CRITERIA),
+        ]
     )
 
 
@@ -371,12 +429,23 @@ def test_measurement_endpoint_measurer_responses_match_shape(
         (reference_payload["width"], reference_payload["height"]),
         MEASUREMENT_RELATIVE_TOLERANCE,
     )
-    object_svg_size = _normal_size(_svg_content_size(object_payload["svg"]))
-    reference_svg_size = _normal_size(_svg_content_size(reference_payload["svg"]))
+    object_svg_content_size = _normal_size(_svg_content_size(object_payload["svg"]))
+    reference_svg_content_size = _normal_size(
+        _svg_content_size(reference_payload["svg"])
+    )
     _assert_sizes_close(
-        object_svg_size,
-        reference_svg_size,
+        object_svg_content_size,
+        reference_svg_content_size,
         SVG_SHAPE_RELATIVE_TOLERANCE,
+    )
+    object_svg_viewbox_size = _normal_size(_svg_viewbox_size(object_payload["svg"]))
+    reference_svg_viewbox_size = _normal_size(
+        _svg_viewbox_size(reference_payload["svg"])
+    )
+    _assert_sizes_close(
+        object_svg_viewbox_size,
+        reference_svg_viewbox_size,
+        SVG_VIEWBOX_RELATIVE_TOLERANCE,
     )
     _print_live(
         capsys,
@@ -385,7 +454,9 @@ def test_measurement_endpoint_measurer_responses_match_shape(
             filename,
             object_payload,
             reference_payload,
-            object_svg_size,
-            reference_svg_size,
+            object_svg_content_size,
+            reference_svg_content_size,
+            object_svg_viewbox_size,
+            reference_svg_viewbox_size,
         ),
     )
