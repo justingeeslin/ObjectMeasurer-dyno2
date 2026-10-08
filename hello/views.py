@@ -1,10 +1,13 @@
 import base64
+from dataclasses import dataclass
 import html
 import inspect
+import logging
 import math
 import mimetypes
 from pathlib import Path
 import re
+import tempfile
 import uuid
 from urllib.parse import quote, urlencode
 
@@ -12,8 +15,10 @@ import cv2
 import numpy as np
 import requests
 from django.conf import settings
-from django.http import FileResponse, Http404, JsonResponse
+from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
 from ObjectMeasurer import ObjectMeasurer
 
 try:
@@ -22,6 +27,8 @@ except ImportError:  # pragma: no cover - optional until requirements are instal
     ReferenceSurfaceMeasurer = None
 
 from .models import Greeting
+
+logger = logging.getLogger(__name__)
 
 # SHORT SIDE / X-AXIS FIRST
 # A4_MM = (210.0, 297.0)
@@ -39,10 +46,31 @@ DEBUG_IMAGE_FORMAT = ".png"
 DEBUG_IMAGE_MIME_TYPE = "image/png"
 SAVED_DEBUG_IMAGE_DEFAULT_MIME_TYPE = "application/octet-stream"
 OBJECT_CONTOUR_SVG_KEY = "object_contour_svg"
+DXF_UPLOAD_FIELD = "file"
+DXF_ALTERNATE_UPLOAD_FIELD = "dxf"
+DXF_SCALE_PARAM = "scale"
+DXF_FIT_PAGE_PARAM = "fit_page"
+DXF_MARGIN_PARAM = "margin"
+DXF_PAGE_WIDTH_PARAM = "page_width"
+DXF_PAGE_HEIGHT_PARAM = "page_height"
+DXF_UNITS_PARAM = "units"
+DXF_DEFAULT_SCALE = 1.0
+DXF_DEFAULT_MARGIN = 0.0
+DXF_DEFAULT_PAGE_SIZE = 0.0
+DXF_DEFAULT_UNITS = "px"
+DXF_PAGE_UNITS = {
+    "px": "px",
+    "mm": "mm",
+    "cm": "cm",
+    "in": "inch",
+    "inch": "inch",
+    "pt": "pt",
+}
 SVG_NUMBER_PATTERN = re.compile(
     r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 )
 TRUE_QUERY_VALUES = {"1", "true", "yes", "on"}
+FALSE_QUERY_VALUES = {"0", "false", "no", "off"}
 OBJECT_MEASURER_NAME = "object"
 REFERENCE_SURFACE_MEASURER_NAME = "reference_surface"
 EXAMPLE_IMAGE_URL = (
@@ -59,6 +87,28 @@ class BadMeasurementOption(ValueError):
     pass
 
 
+class BadDxfConversionOption(ValueError):
+    pass
+
+
+class BadDxfUpload(ValueError):
+    pass
+
+
+class DxfConversionDependencyMissing(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class DxfSvgOptions:
+    scale: float = DXF_DEFAULT_SCALE
+    fit_page: bool = False
+    margin: float = DXF_DEFAULT_MARGIN
+    page_width: float = DXF_DEFAULT_PAGE_SIZE
+    page_height: float = DXF_DEFAULT_PAGE_SIZE
+    units: str = DXF_DEFAULT_UNITS
+
+
 def _parse_positive_float(value, param_name):
     try:
         parsed = float(value)
@@ -68,6 +118,20 @@ def _parse_positive_float(value, param_name):
     if not math.isfinite(parsed) or parsed <= 0:
         raise BadReferenceSize(
             f"'{param_name}' must be a finite number greater than 0."
+        )
+
+    return parsed
+
+
+def _parse_non_negative_float(value, param_name):
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        raise BadDxfConversionOption(f"'{param_name}' must be a number.")
+
+    if not math.isfinite(parsed) or parsed < 0:
+        raise BadDxfConversionOption(
+            f"'{param_name}' must be a finite number greater than or equal to 0."
         )
 
     return parsed
@@ -170,6 +234,93 @@ def _query_param_enabled(query_params, param_name):
         return False
 
     return str(value).strip().lower() in TRUE_QUERY_VALUES
+
+
+def _request_param(request, param_name, default=None):
+    if param_name in request.POST:
+        return request.POST.get(param_name)
+
+    return request.GET.get(param_name, default)
+
+
+def _parse_dxf_positive_float_param(request, param_name, default):
+    value = _request_param(request, param_name)
+    if value is None:
+        return default
+
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        raise BadDxfConversionOption(f"'{param_name}' must be a number.")
+
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise BadDxfConversionOption(
+            f"'{param_name}' must be a finite number greater than 0."
+        )
+
+    return parsed
+
+
+def _parse_dxf_non_negative_float_param(request, param_name, default):
+    value = _request_param(request, param_name)
+    if value is None:
+        return default
+
+    return _parse_non_negative_float(value, param_name)
+
+
+def _parse_dxf_bool_param(request, param_name, default):
+    value = _request_param(request, param_name)
+    if value is None:
+        return default
+
+    normalized = str(value).strip().lower()
+    if normalized in TRUE_QUERY_VALUES:
+        return True
+    if normalized in FALSE_QUERY_VALUES:
+        return False
+
+    raise BadDxfConversionOption(
+        f"'{param_name}' must be one of: "
+        f"{', '.join(sorted(TRUE_QUERY_VALUES | FALSE_QUERY_VALUES))}."
+    )
+
+
+def get_dxf_svg_options(request):
+    units = (
+        str(_request_param(request, DXF_UNITS_PARAM, DXF_DEFAULT_UNITS))
+        .strip()
+        .lower()
+    )
+    if units not in DXF_PAGE_UNITS:
+        raise BadDxfConversionOption(
+            f"'{DXF_UNITS_PARAM}' must be one of: {', '.join(sorted(DXF_PAGE_UNITS))}."
+        )
+
+    return DxfSvgOptions(
+        scale=_parse_dxf_positive_float_param(
+            request,
+            DXF_SCALE_PARAM,
+            DXF_DEFAULT_SCALE,
+        ),
+        fit_page=_parse_dxf_bool_param(request, DXF_FIT_PAGE_PARAM, False),
+        margin=_parse_dxf_non_negative_float_param(
+            request,
+            DXF_MARGIN_PARAM,
+            DXF_DEFAULT_MARGIN,
+        ),
+        page_width=_parse_dxf_non_negative_float_param(
+            request,
+            DXF_PAGE_WIDTH_PARAM,
+            DXF_DEFAULT_PAGE_SIZE,
+        ),
+        page_height=_parse_dxf_non_negative_float_param(
+            request,
+            DXF_PAGE_HEIGHT_PARAM,
+            DXF_DEFAULT_PAGE_SIZE,
+        ),
+        units=units,
+    )
 
 
 def get_debug_image_root():
@@ -567,6 +718,139 @@ def index(request):
             "letter_reference_size": LETTER_MM,
         },
     )
+
+
+def _load_ezdxf_drawing_modules():
+    try:
+        import ezdxf
+        from ezdxf import recover
+        from ezdxf.addons.drawing import Frontend, RenderContext, config, layout, svg
+    except ImportError as exc:
+        raise DxfConversionDependencyMissing(
+            "DXF to SVG conversion requires the 'ezdxf' package."
+        ) from exc
+
+    return ezdxf, recover, Frontend, RenderContext, config, layout, svg
+
+
+def _read_dxf_document(dxf_path, ezdxf, recover):
+    try:
+        return ezdxf.readfile(dxf_path)
+    except (IOError, UnicodeDecodeError, ezdxf.DXFStructureError) as first_error:
+        try:
+            doc, auditor = recover.readfile(dxf_path)
+        except (IOError, UnicodeDecodeError, ezdxf.DXFStructureError) as exc:
+            raise BadDxfUpload(
+                "Uploaded file is not a readable DXF document."
+            ) from exc
+
+        if auditor.has_errors:
+            raise BadDxfUpload(
+                "Uploaded DXF contains unrecoverable structure errors."
+            ) from first_error
+
+        return doc
+
+
+def render_dxf_path_to_svg(dxf_path, options):
+    ezdxf, recover, Frontend, RenderContext, config, layout, svg = (
+        _load_ezdxf_drawing_modules()
+    )
+    doc = _read_dxf_document(dxf_path, ezdxf, recover)
+    page_units = getattr(layout.Units, DXF_PAGE_UNITS[options.units])
+
+    context = RenderContext(doc)
+    backend = svg.SVGBackend()
+    render_config = config.Configuration(
+        background_policy=config.BackgroundPolicy.WHITE,
+        color_policy=config.ColorPolicy.BLACK,
+    )
+    Frontend(context, backend, config=render_config).draw_layout(doc.modelspace())
+
+    page = layout.Page(
+        options.page_width,
+        options.page_height,
+        page_units,
+        margins=layout.Margins.all(options.margin),
+    )
+    settings = layout.Settings(scale=options.scale, fit_page=options.fit_page)
+    return backend.get_string(page, settings=settings)
+
+
+def convert_uploaded_dxf_to_svg(uploaded_file, options):
+    dxf_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".dxf", delete=False) as dxf_file:
+            dxf_path = Path(dxf_file.name)
+            for chunk in uploaded_file.chunks():
+                dxf_file.write(chunk)
+
+        return render_dxf_path_to_svg(dxf_path, options)
+    finally:
+        if dxf_path is not None:
+            dxf_path.unlink(missing_ok=True)
+
+
+def _svg_download_name(uploaded_file):
+    stem = Path(uploaded_file.name or "drawing").stem
+    safe_stem = "".join(
+        character if character.isalnum() or character in "-_" else "_"
+        for character in stem
+    ).strip("_")
+
+    return f"{safe_stem or 'drawing'}.svg"
+
+
+@csrf_exempt
+@require_POST
+def dxf_to_svg(request):
+    uploaded_file = request.FILES.get(DXF_UPLOAD_FIELD) or request.FILES.get(
+        DXF_ALTERNATE_UPLOAD_FIELD
+    )
+    if uploaded_file is None:
+        return JsonResponse(
+            {
+                "error": "Missing DXF upload",
+                "details": (
+                    f"Upload a multipart file field named '{DXF_UPLOAD_FIELD}' "
+                    f"or '{DXF_ALTERNATE_UPLOAD_FIELD}'."
+                ),
+            },
+            status=400,
+        )
+
+    try:
+        options = get_dxf_svg_options(request)
+        svg_markup = convert_uploaded_dxf_to_svg(uploaded_file, options)
+    except BadDxfConversionOption as exc:
+        return JsonResponse(
+            {"error": "Invalid DXF conversion option", "details": str(exc)},
+            status=400,
+        )
+    except BadDxfUpload as exc:
+        return JsonResponse(
+            {"error": "Invalid DXF upload", "details": str(exc)},
+            status=400,
+        )
+    except DxfConversionDependencyMissing as exc:
+        return JsonResponse(
+            {"error": "DXF conversion unavailable", "details": str(exc)},
+            status=503,
+        )
+    except Exception as exc:
+        logger.exception("DXF to SVG conversion failed")
+        return JsonResponse(
+            {"error": "DXF to SVG conversion failed", "details": str(exc)},
+            status=500,
+        )
+
+    response = HttpResponse(svg_markup, content_type="image/svg+xml; charset=utf-8")
+    response["Content-Disposition"] = (
+        f'inline; filename="{_svg_download_name(uploaded_file)}"'
+    )
+    response["X-DXF-SVG-Scale"] = str(options.scale)
+    response["X-DXF-SVG-Units"] = options.units
+    return response
 
 
 def measure(request):

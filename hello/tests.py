@@ -1,5 +1,8 @@
 import base64
+import importlib.util
+import io
 import tempfile
+import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -7,9 +10,10 @@ from urllib.parse import urlparse
 
 import cv2
 import numpy as np
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, override_settings
 
-from .views import PORTRAIT_POSTER_BOARD_MM
+from .views import BadDxfUpload, DxfSvgOptions, PORTRAIT_POSTER_BOARD_MM
 
 
 class MeasureEndpointTest(SimpleTestCase):
@@ -564,3 +568,131 @@ class MeasureEndpointTest(SimpleTestCase):
         self.assertEqual(response.json()["error"], "Invalid measurement option")
         self.assertIn("greater than 0", response.json()["details"])
         requests_get.assert_not_called()
+
+    @patch("hello.views.convert_uploaded_dxf_to_svg")
+    def test_dxf_to_svg_accepts_upload_with_default_scaling(self, convert_dxf):
+        convert_dxf.return_value = '<svg xmlns="http://www.w3.org/2000/svg"></svg>'
+        upload = SimpleUploadedFile(
+            "part.dxf",
+            b"0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n",
+            content_type="application/dxf",
+        )
+
+        response = self.client.post("/dxf-to-svg/", {"file": upload})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.headers["Content-Type"],
+            "image/svg+xml; charset=utf-8",
+        )
+        self.assertEqual(
+            response.headers["Content-Disposition"],
+            'inline; filename="part.svg"',
+        )
+        self.assertEqual(response.headers["X-DXF-SVG-Scale"], "1.0")
+        self.assertEqual(response.headers["X-DXF-SVG-Units"], "px")
+        self.assertEqual(response.content.decode(), convert_dxf.return_value)
+
+        uploaded_file, options = convert_dxf.call_args.args
+        self.assertEqual(uploaded_file.name, "part.dxf")
+        self.assertEqual(options, DxfSvgOptions())
+
+    @patch("hello.views.convert_uploaded_dxf_to_svg")
+    def test_dxf_to_svg_accepts_custom_scaling_options(self, convert_dxf):
+        convert_dxf.return_value = '<svg xmlns="http://www.w3.org/2000/svg"></svg>'
+        upload = SimpleUploadedFile(
+            "drawing.dxf",
+            b"0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n",
+            content_type="application/dxf",
+        )
+
+        response = self.client.post(
+            "/dxf-to-svg/?page_width=500",
+            {
+                "file": upload,
+                "scale": "2.5",
+                "fit_page": "yes",
+                "margin": "4",
+                "page_height": "600",
+                "units": "mm",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            convert_dxf.call_args.args[1],
+            DxfSvgOptions(
+                scale=2.5,
+                fit_page=True,
+                margin=4.0,
+                page_width=500.0,
+                page_height=600.0,
+                units="mm",
+            ),
+        )
+
+    @patch("hello.views.convert_uploaded_dxf_to_svg")
+    def test_dxf_to_svg_rejects_missing_upload(self, convert_dxf):
+        response = self.client.post("/dxf-to-svg/", {"scale": "1"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Missing DXF upload")
+        convert_dxf.assert_not_called()
+
+    @patch("hello.views.convert_uploaded_dxf_to_svg")
+    def test_dxf_to_svg_rejects_invalid_scale(self, convert_dxf):
+        upload = SimpleUploadedFile(
+            "part.dxf",
+            b"0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n",
+            content_type="application/dxf",
+        )
+
+        response = self.client.post("/dxf-to-svg/", {"file": upload, "scale": "0"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Invalid DXF conversion option")
+        self.assertIn("greater than 0", response.json()["details"])
+        convert_dxf.assert_not_called()
+
+    @patch("hello.views.convert_uploaded_dxf_to_svg")
+    def test_dxf_to_svg_reports_invalid_dxf_upload(self, convert_dxf):
+        convert_dxf.side_effect = BadDxfUpload(
+            "Uploaded file is not a readable DXF document."
+        )
+        upload = SimpleUploadedFile(
+            "not-dxf.txt",
+            b"not a dxf",
+            content_type="text/plain",
+        )
+
+        response = self.client.post("/dxf-to-svg/", {"file": upload})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Invalid DXF upload")
+        self.assertIn("not a readable DXF", response.json()["details"])
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("ezdxf"),
+        "ezdxf is not installed",
+    )
+    def test_dxf_to_svg_converts_real_dxf_when_ezdxf_is_available(self):
+        import ezdxf
+
+        doc = ezdxf.new()
+        doc.modelspace().add_lwpolyline(
+            [(0, 0), (10, 0), (10, 5), (0, 5), (0, 0)]
+        )
+        stream = io.StringIO()
+        doc.write(stream)
+        upload = SimpleUploadedFile(
+            "rectangle.dxf",
+            stream.getvalue().encode("utf-8"),
+            content_type="application/dxf",
+        )
+
+        response = self.client.post("/dxf-to-svg/", {"file": upload})
+
+        self.assertEqual(response.status_code, 200, response.content.decode())
+        svg = response.content.decode()
+        self.assertIn("<svg", svg)
+        self.assertIn("</svg>", svg)
