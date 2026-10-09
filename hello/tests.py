@@ -20,6 +20,7 @@ from .views import (
     DxfSvgOptions,
     PORTRAIT_POSTER_BOARD_MM,
     _load_ezdxf_drawing_modules,
+    _remove_dxf_text_entities,
     get_measurement_kwargs,
 )
 
@@ -707,6 +708,67 @@ class MeasureEndpointTest(SimpleTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"], "Invalid DXF upload")
         self.assertIn("not a readable DXF", response.json()["details"])
+
+    @unittest.skipUnless(
+        dxf_svg_converter_available(),
+        "ezdxf drawing dependencies are not installed",
+    )
+    def test_dxf_to_svg_removes_text_entities_before_rendering(self):
+        import ezdxf
+
+        doc = ezdxf.new()
+        modelspace = doc.modelspace()
+        modelspace.add_line((0, 0), (10, 0))
+        modelspace.add_text("MODEL LABEL")
+        modelspace.add_mtext("MODEL MULTILINE LABEL")
+
+        block = doc.blocks.new(name="LABELED_BLOCK")
+        block.add_line((0, 0), (0, 10))
+        block.add_text("BLOCK LABEL")
+        block.add_attdef("PIECE", text="BLOCK ATTRIBUTE LABEL")
+
+        insert = modelspace.add_blockref("LABELED_BLOCK", (0, 0))
+        insert.add_attrib("PIECE", "INSERT ATTRIBUTE LABEL")
+
+        _remove_dxf_text_entities(doc)
+
+        self.assertEqual(
+            [entity.dxftype() for entity in modelspace],
+            ["LINE", "INSERT"],
+        )
+        self.assertEqual([entity.dxftype() for entity in block], ["LINE"])
+        self.assertEqual(insert.attribs, [])
+
+    @unittest.skipUnless(
+        dxf_svg_converter_available(),
+        "ezdxf drawing dependencies are not installed",
+    )
+    def test_dxf_to_svg_excludes_label_text_from_rendered_svg(self):
+        import ezdxf
+
+        doc = ezdxf.new()
+        modelspace = doc.modelspace()
+        modelspace.add_lwpolyline(
+            [(0, 0), (10, 0), (10, 5), (0, 5), (0, 0)]
+        )
+        modelspace.add_text("DISTANT LABEL", height=100).set_placement((1000, 1000))
+
+        stream = io.StringIO()
+        doc.write(stream)
+        upload = SimpleUploadedFile(
+            "labeled-rectangle.dxf",
+            stream.getvalue().encode("utf-8"),
+            content_type="application/dxf",
+        )
+
+        response = self.client.post("/dxf-to-svg/", {"file": upload})
+
+        self.assertEqual(response.status_code, 200, response.content.decode())
+        svg = response.content.decode()
+        root = ET.fromstring(svg)
+        self.assertEqual(root.attrib["width"], "10mm")
+        self.assertEqual(root.attrib["height"], "5mm")
+        self.assertNotIn("DISTANT LABEL", svg)
 
     @unittest.skipUnless(
         dxf_svg_converter_available(),

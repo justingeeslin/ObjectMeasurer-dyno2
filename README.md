@@ -118,6 +118,9 @@ size, uses pixel page units, disables fit-to-page scaling, and sets `scale=1`,
 which is the intended `1mm` drawing-unit to `1px` output mapping for millimeter
 DXF files.
 
+Text labels are removed before SVG rendering so DXF `TEXT`, `MTEXT`, `ATTRIB`,
+and `ATTDEF` entities do not become SVG path geometry.
+
 Scaling and layout options can be sent as multipart fields or query parameters:
 
 - `scale`: positive float, defaults to `1`

@@ -67,6 +67,7 @@ DXF_PAGE_UNITS = {
     "inch": "inch",
     "pt": "pt",
 }
+DXF_TEXT_ENTITY_TYPES = {"TEXT", "MTEXT", "ATTRIB", "ATTDEF"}
 SVG_NUMBER_PATTERN = re.compile(
     r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 )
@@ -757,11 +758,38 @@ def _read_dxf_document(dxf_path, ezdxf, recover):
         return doc
 
 
+def _iter_unique_dxf_entity_spaces(doc):
+    seen = set()
+
+    for entity_spaces in (doc.layouts, doc.blocks):
+        for entity_space in entity_spaces:
+            raw_entity_space = getattr(entity_space, "entity_space", entity_space)
+            marker = id(raw_entity_space)
+            if marker in seen:
+                continue
+
+            seen.add(marker)
+            yield entity_space
+
+
+def _remove_dxf_text_entities(doc):
+    for entity_space in _iter_unique_dxf_entity_spaces(doc):
+        for entity in list(entity_space):
+            entity_type = entity.dxftype()
+
+            if entity_type == "INSERT" and getattr(entity, "attribs", None):
+                entity.delete_all_attribs()
+
+            if entity_type in DXF_TEXT_ENTITY_TYPES:
+                entity_space.delete_entity(entity)
+
+
 def render_dxf_path_to_svg(dxf_path, options):
     ezdxf, recover, Frontend, RenderContext, config, layout, svg = (
         _load_ezdxf_drawing_modules()
     )
     doc = _read_dxf_document(dxf_path, ezdxf, recover)
+    _remove_dxf_text_entities(doc)
     page_units = getattr(layout.Units, DXF_PAGE_UNITS[options.units])
 
     context = RenderContext(doc)
