@@ -62,7 +62,7 @@ $ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&measure
 To pass a scale option to the selected measurer, use `scale`:
 
 ```term
-$ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&reference_size_mm=215.9,279.4&scale=2"
+$ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&reference_size_mm=215.9,279.4&scale=0.001"
 ```
 
 To include the structured diagnostics collected by the selected measurer,

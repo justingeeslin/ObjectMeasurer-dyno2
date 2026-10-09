@@ -137,14 +137,16 @@ def _parse_non_negative_float(value, param_name):
     return parsed
 
 
-def _parse_positive_int(value, param_name):
+def _parse_positive_measurement_float(value, param_name):
     try:
-        parsed = int(value)
+        parsed = float(value)
     except (TypeError, ValueError):
-        raise BadMeasurementOption(f"'{param_name}' must be an integer.")
+        raise BadMeasurementOption(f"'{param_name}' must be a number.")
 
-    if parsed <= 0:
-        raise BadMeasurementOption(f"'{param_name}' must be greater than 0.")
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise BadMeasurementOption(
+            f"'{param_name}' must be a finite number greater than 0."
+        )
 
     return parsed
 
@@ -191,7 +193,7 @@ def get_measurement_kwargs(query_params):
 
     scale = query_params.get(SCALE_PARAM)
     if scale is not None:
-        kwargs["scale"] = _parse_positive_int(scale, SCALE_PARAM)
+        kwargs["scale"] = _parse_positive_measurement_float(scale, SCALE_PARAM)
 
     return kwargs
 

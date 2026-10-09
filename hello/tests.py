@@ -13,7 +13,12 @@ import numpy as np
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, override_settings
 
-from .views import BadDxfUpload, DxfSvgOptions, PORTRAIT_POSTER_BOARD_MM
+from .views import (
+    BadDxfUpload,
+    DxfSvgOptions,
+    PORTRAIT_POSTER_BOARD_MM,
+    get_measurement_kwargs,
+)
 
 
 class MeasureEndpointTest(SimpleTestCase):
@@ -474,14 +479,30 @@ class MeasureEndpointTest(SimpleTestCase):
             {
                 "url": "https://example.com/photo.jpg",
                 "reference_size_mm": "215.9,279.4",
-                "scale": "2",
+                "scale": "0.001",
             },
         )
 
         self.assertEqual(response.status_code, 200)
         object_measurer.assert_called_once_with(
             reference_size_mm=(215.9, 279.4),
-            scale=2,
+            scale=0.001,
+        )
+
+    def test_measurement_kwargs_accept_fractional_scale(self):
+        kwargs = get_measurement_kwargs(
+            {
+                "reference_size_mm": "215.9,279.4",
+                "scale": "0.001",
+            }
+        )
+
+        self.assertEqual(
+            kwargs,
+            {
+                "reference_size_mm": (215.9, 279.4),
+                "scale": 0.001,
+            },
         )
 
     @patch("hello.views.requests.get")
