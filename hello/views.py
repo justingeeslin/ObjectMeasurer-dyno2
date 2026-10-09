@@ -729,8 +729,10 @@ def _load_ezdxf_drawing_modules():
         from ezdxf import recover
         from ezdxf.addons.drawing import Frontend, RenderContext, config, layout, svg
     except ImportError as exc:
+        missing_dependency = getattr(exc, "name", None) or str(exc)
         raise DxfConversionDependencyMissing(
-            "DXF to SVG conversion requires the 'ezdxf' package."
+            "DXF to SVG conversion requires the ezdxf drawing dependencies. "
+            f"Missing import: {missing_dependency}."
         ) from exc
 
     return ezdxf, recover, Frontend, RenderContext, config, layout, svg

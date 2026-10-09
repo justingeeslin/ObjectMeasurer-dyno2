@@ -1,5 +1,4 @@
 import base64
-import importlib.util
 import io
 import re
 import tempfile
@@ -17,10 +16,21 @@ from django.test import SimpleTestCase, override_settings
 
 from .views import (
     BadDxfUpload,
+    DxfConversionDependencyMissing,
     DxfSvgOptions,
     PORTRAIT_POSTER_BOARD_MM,
+    _load_ezdxf_drawing_modules,
     get_measurement_kwargs,
 )
+
+
+def dxf_svg_converter_available():
+    try:
+        _load_ezdxf_drawing_modules()
+    except DxfConversionDependencyMissing:
+        return False
+
+    return True
 
 
 class MeasureEndpointTest(SimpleTestCase):
@@ -699,8 +709,8 @@ class MeasureEndpointTest(SimpleTestCase):
         self.assertIn("not a readable DXF", response.json()["details"])
 
     @unittest.skipUnless(
-        importlib.util.find_spec("ezdxf"),
-        "ezdxf is not installed",
+        dxf_svg_converter_available(),
+        "ezdxf drawing dependencies are not installed",
     )
     def test_dxf_to_svg_converts_real_dxf_when_ezdxf_is_available(self):
         import ezdxf
@@ -725,8 +735,8 @@ class MeasureEndpointTest(SimpleTestCase):
         self.assertIn("</svg>", svg)
 
     @unittest.skipUnless(
-        importlib.util.find_spec("ezdxf"),
-        "ezdxf is not installed",
+        dxf_svg_converter_available(),
+        "ezdxf drawing dependencies are not installed",
     )
     def test_dxf_to_svg_scales_path_geometry(self):
         dxf_bytes = self.build_rectangle_dxf_bytes(width=1000, height=500)
