@@ -769,6 +769,59 @@ class MeasureEndpointTest(SimpleTestCase):
         self.assertEqual(root.attrib["width"], "10mm")
         self.assertEqual(root.attrib["height"], "5mm")
         self.assertNotIn("DISTANT LABEL", svg)
+        self.assertIsNotNone(root.find(".//{http://www.w3.org/2000/svg}polygon"))
+        self.assertIsNone(root.find(".//{http://www.w3.org/2000/svg}path"))
+
+    @unittest.skipUnless(
+        dxf_svg_converter_available(),
+        "ezdxf drawing dependencies are not installed",
+    )
+    def test_dxf_to_svg_renders_open_line_geometry_as_polyline(self):
+        import ezdxf
+
+        doc = ezdxf.new()
+        doc.modelspace().add_line((0, 0), (10, 5))
+
+        stream = io.StringIO()
+        doc.write(stream)
+        upload = SimpleUploadedFile(
+            "line.dxf",
+            stream.getvalue().encode("utf-8"),
+            content_type="application/dxf",
+        )
+
+        response = self.client.post("/dxf-to-svg/", {"file": upload})
+
+        self.assertEqual(response.status_code, 200, response.content.decode())
+        root = ET.fromstring(response.content.decode())
+        polyline = root.find(".//{http://www.w3.org/2000/svg}polyline")
+        self.assertIsNotNone(polyline)
+        self.assertEqual(polyline.attrib["points"], "0,500000 1000000,0")
+        self.assertIsNone(root.find(".//{http://www.w3.org/2000/svg}path"))
+
+    @unittest.skipUnless(
+        dxf_svg_converter_available(),
+        "ezdxf drawing dependencies are not installed",
+    )
+    def test_dxf_to_svg_keeps_curved_geometry_as_path(self):
+        import ezdxf
+
+        doc = ezdxf.new()
+        doc.modelspace().add_circle((5, 5), radius=5)
+
+        stream = io.StringIO()
+        doc.write(stream)
+        upload = SimpleUploadedFile(
+            "circle.dxf",
+            stream.getvalue().encode("utf-8"),
+            content_type="application/dxf",
+        )
+
+        response = self.client.post("/dxf-to-svg/", {"file": upload})
+
+        self.assertEqual(response.status_code, 200, response.content.decode())
+        root = ET.fromstring(response.content.decode())
+        self.assertIsNotNone(root.find(".//{http://www.w3.org/2000/svg}path"))
 
     @unittest.skipUnless(
         dxf_svg_converter_available(),
@@ -800,9 +853,9 @@ class MeasureEndpointTest(SimpleTestCase):
         dxf_svg_converter_available(),
         "ezdxf drawing dependencies are not installed",
     )
-    def test_dxf_to_svg_scales_path_geometry(self):
+    def test_dxf_to_svg_scales_shape_geometry(self):
         dxf_bytes = self.build_rectangle_dxf_bytes(width=1000, height=500)
-        path_sizes = {}
+        shape_sizes = {}
 
         for scale in (1, 0.1, 0.001):
             upload = SimpleUploadedFile(
@@ -822,11 +875,11 @@ class MeasureEndpointTest(SimpleTestCase):
             self.assertEqual(response.status_code, 200, response.content.decode())
             svg_markup = response.content.decode()
             print(f"\n--- DXF to SVG scale={scale} ---\n{svg_markup}\n")
-            path_sizes[scale] = self.svg_first_path_size(svg_markup)
+            shape_sizes[scale] = self.svg_first_shape_size(svg_markup)
 
-        base_width, base_height = path_sizes[1]
+        base_width, base_height = shape_sizes[1]
         for scale in (0.1, 0.001):
-            width, height = path_sizes[scale]
+            width, height = shape_sizes[scale]
             self.assertAlmostEqual(width, base_width * scale)
             self.assertAlmostEqual(height, base_height * scale)
 
@@ -843,14 +896,33 @@ class MeasureEndpointTest(SimpleTestCase):
         return stream.getvalue().encode("utf-8")
 
     @classmethod
-    def svg_first_path_size(cls, svg_markup):
+    def svg_first_shape_size(cls, svg_markup):
         root = ET.fromstring(svg_markup)
 
         for element in root.iter():
             if element.tag.endswith("path"):
                 return cls.svg_path_size(element.attrib["d"])
+            if element.tag.endswith(("polygon", "polyline")):
+                return cls.svg_points_size(element.attrib["points"])
 
-        raise AssertionError("SVG did not contain a path")
+        raise AssertionError("SVG did not contain a path, polygon, or polyline")
+
+    @classmethod
+    def svg_points_size(cls, points_data):
+        values = [
+            float(value)
+            for value in re.findall(
+                r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?",
+                points_data,
+            )
+        ]
+        if len(values) < 4 or len(values) % 2:
+            raise AssertionError(f"Unexpected SVG points data: {points_data!r}")
+
+        points = list(zip(values[::2], values[1::2]))
+        x_values = [point[0] for point in points]
+        y_values = [point[1] for point in points]
+        return max(x_values) - min(x_values), max(y_values) - min(y_values)
 
     @classmethod
     def svg_path_size(cls, path_data):

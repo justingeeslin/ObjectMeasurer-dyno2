@@ -10,6 +10,7 @@ import re
 import tempfile
 import uuid
 from urllib.parse import quote, urlencode
+from xml.etree import ElementTree as ET
 
 import cv2
 import numpy as np
@@ -59,6 +60,7 @@ DXF_DEFAULT_MARGIN = 0.0
 DXF_DEFAULT_PAGE_SIZE = 0.0
 DXF_DEFAULT_UNITS = "px"
 DXF_OUTPUT_COORDINATE_SPACE = 1_000_000.0
+DXF_SVG_POINT_CLOSE_TOLERANCE = 1e-6
 DXF_PAGE_UNITS = {
     "px": "px",
     "mm": "mm",
@@ -729,6 +731,7 @@ def _load_ezdxf_drawing_modules():
         import ezdxf
         from ezdxf import recover
         from ezdxf.addons.drawing import Frontend, RenderContext, config, layout, svg
+        from ezdxf.path import Command
     except ImportError as exc:
         missing_dependency = getattr(exc, "name", None) or str(exc)
         raise DxfConversionDependencyMissing(
@@ -736,7 +739,7 @@ def _load_ezdxf_drawing_modules():
             f"Missing import: {missing_dependency}."
         ) from exc
 
-    return ezdxf, recover, Frontend, RenderContext, config, layout, svg
+    return ezdxf, recover, Frontend, RenderContext, config, layout, svg, Command
 
 
 def _read_dxf_document(dxf_path, ezdxf, recover):
@@ -784,8 +787,101 @@ def _remove_dxf_text_entities(doc):
                 entity_space.delete_entity(entity)
 
 
+def _format_svg_points(points):
+    return " ".join(f"{point.x:.0f},{point.y:.0f}" for point in points)
+
+
+def _dxf_svg_points_are_closed(points):
+    if len(points) < 4:
+        return False
+
+    start = points[0]
+    end = points[-1]
+    return math.isclose(
+        start.x,
+        end.x,
+        abs_tol=DXF_SVG_POINT_CLOSE_TOLERANCE,
+    ) and math.isclose(
+        start.y,
+        end.y,
+        abs_tol=DXF_SVG_POINT_CLOSE_TOLERANCE,
+    )
+
+
+def _dxf_svg_straight_path_points(path, path_command):
+    if len(path) == 0:
+        return []
+
+    points = [path.start]
+    for command in path.commands():
+        if command.type != path_command.LINE_TO:
+            return None
+
+        points.append(command.end)
+
+    return points
+
+
+def _build_shape_svg_backend(svg_module, path_command):
+    class ShapeSvgRenderBackend(svg_module.SVGRenderBackend):
+        def add_stroked_shape(self, tag, points, properties):
+            point_data = _format_svg_points(points)
+            if not point_data:
+                return
+
+            element = ET.SubElement(self.entities, tag, points=point_data)
+            stroke_width = self.resolve_stroke_width(properties.lineweight)
+            stroke_color, stroke_opacity = self.resolve_color(properties.color)
+            cls = self.styles.get_class(
+                stroke=stroke_color,
+                stroke_width=stroke_width,
+                stroke_opacity=stroke_opacity,
+            )
+            element.set("class", cls)
+
+        def add_filled_shape(self, tag, points, properties):
+            point_data = _format_svg_points(points)
+            if not point_data:
+                return
+
+            element = ET.SubElement(self.entities, tag, points=point_data)
+            fill_color, fill_opacity = self.resolve_color(properties.color)
+            cls = self.styles.get_class(fill=fill_color, fill_opacity=fill_opacity)
+            element.set("class", cls)
+
+        def draw_point(self, pos, properties):
+            self.add_stroked_shape("polyline", [pos, pos], properties)
+
+        def draw_line(self, start, end, properties):
+            self.add_stroked_shape("polyline", [start, end], properties)
+
+        def draw_solid_lines(self, lines, properties):
+            for start, end in lines:
+                self.add_stroked_shape("polyline", [start, end], properties)
+
+        def draw_path(self, path, properties):
+            points = _dxf_svg_straight_path_points(path, path_command)
+            if points is None:
+                return super().draw_path(path, properties)
+
+            if _dxf_svg_points_are_closed(points):
+                self.add_stroked_shape("polygon", points[:-1], properties)
+            else:
+                self.add_stroked_shape("polyline", points, properties)
+
+        def draw_filled_polygon(self, points, properties):
+            self.add_filled_shape("polygon", points.vertices(), properties)
+
+    class ShapeSvgBackend(svg_module.SVGBackend):
+        @staticmethod
+        def make_backend(page, settings):
+            return ShapeSvgRenderBackend(page, settings)
+
+    return ShapeSvgBackend()
+
+
 def render_dxf_path_to_svg(dxf_path, options):
-    ezdxf, recover, Frontend, RenderContext, config, layout, svg = (
+    ezdxf, recover, Frontend, RenderContext, config, layout, svg, Command = (
         _load_ezdxf_drawing_modules()
     )
     doc = _read_dxf_document(dxf_path, ezdxf, recover)
@@ -793,7 +889,7 @@ def render_dxf_path_to_svg(dxf_path, options):
     page_units = getattr(layout.Units, DXF_PAGE_UNITS[options.units])
 
     context = RenderContext(doc)
-    backend = svg.SVGBackend()
+    backend = _build_shape_svg_backend(svg, Command)
     render_config = config.Configuration(
         background_policy=config.BackgroundPolicy.WHITE,
         color_policy=config.ColorPolicy.BLACK,

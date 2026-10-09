@@ -121,6 +121,10 @@ DXF files.
 Text labels are removed before SVG rendering so DXF `TEXT`, `MTEXT`, `ATTRIB`,
 and `ATTDEF` entities do not become SVG path geometry.
 
+Straight-line geometry is emitted as SVG shapes where possible: closed line
+paths become `polygon` elements, open line paths become `polyline` elements,
+and curved geometry remains as `path` elements.
+
 Scaling and layout options can be sent as multipart fields or query parameters:
 
 - `scale`: positive float, defaults to `1`
