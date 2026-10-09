@@ -23,6 +23,7 @@ import hello.views
 urlpatterns = [
     # path("", hello.views.index, name="index"),
     path("debug-images/<path:path>", hello.views.debug_image, name="debug-image"),
+    path("dxf-to-svg/", hello.views.dxf_to_svg, name="dxf-to-svg"),
     path("", hello.views.measure, name="measure"),
     # path("db/", hello.views.db, name="db"),
     # Uncomment this and the entry in `INSTALLED_APPS` if you wish to use the Django admin feature:

@@ -62,7 +62,7 @@ $ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&measure
 To pass a scale option to the selected measurer, use `scale`:
 
 ```term
-$ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&reference_size_mm=215.9,279.4&scale=2"
+$ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&reference_size_mm=215.9,279.4&scale=0.001"
 ```
 
 To include the structured diagnostics collected by the selected measurer,
@@ -101,6 +101,44 @@ The response will include a `debug_image_urls` array with each saved image's
 `name`, `filename`, `mime_type`, and absolute `url`. These files are stored on
 the local dyno filesystem and can disappear when the dyno restarts. Requests
 with `debug_image_urls=1` also include the structured `debug` object.
+
+## DXF to SVG endpoint
+
+POST a multipart DXF upload to `/dxf-to-svg/` using a file field named `file`
+or `dxf`:
+
+```term
+$ curl -X POST "http://localhost:5006/dxf-to-svg/" \
+    -F "file=@drawing.dxf" \
+    -o drawing.svg
+```
+
+The endpoint returns `image/svg+xml`. By default it auto-detects the SVG page
+size, uses pixel page units, disables fit-to-page scaling, and sets `scale=1`,
+which is the intended `1mm` drawing-unit to `1px` output mapping for millimeter
+DXF files.
+
+Text labels are removed before SVG rendering so DXF `TEXT`, `MTEXT`, `ATTRIB`,
+and `ATTDEF` entities do not become SVG path geometry.
+
+Scaling and layout options can be sent as multipart fields or query parameters:
+
+- `scale`: positive float, defaults to `1`
+- `fit_page`: boolean, defaults to `false`
+- `margin`: non-negative float, defaults to `0`
+- `page_width` and `page_height`: non-negative floats, default to `0` for auto
+  page sizing
+- `units`: one of `px`, `mm`, `cm`, `in`, `inch`, or `pt`; defaults to `px`
+
+Example with custom scaling:
+
+```term
+$ curl -X POST "http://localhost:5006/dxf-to-svg/" \
+    -F "file=@drawing.dxf" \
+    -F "scale=2" \
+    -F "margin=8" \
+    -o drawing.svg
+```
 
 ## Endpoint end-to-end test
 

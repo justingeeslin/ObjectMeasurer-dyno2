@@ -1,18 +1,44 @@
 import base64
+import io
+import re
 import tempfile
+import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import urlparse
+from xml.etree import ElementTree as ET
 
 import cv2
 import numpy as np
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, override_settings
 
-from .views import PORTRAIT_POSTER_BOARD_MM
+from .views import (
+    BadDxfUpload,
+    DxfConversionDependencyMissing,
+    DxfSvgOptions,
+    PORTRAIT_POSTER_BOARD_MM,
+    _load_ezdxf_drawing_modules,
+    _remove_dxf_text_entities,
+    get_measurement_kwargs,
+)
+
+
+def dxf_svg_converter_available():
+    try:
+        _load_ezdxf_drawing_modules()
+    except DxfConversionDependencyMissing:
+        return False
+
+    return True
 
 
 class MeasureEndpointTest(SimpleTestCase):
+    SVG_PATH_TOKEN_PATTERN = re.compile(
+        r"[MmLlHhVvZz]|[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+    )
+
     def configure_successful_measurement(self, requests_get, imdecode, object_measurer):
         requests_get.return_value = SimpleNamespace(
             ok=True,
@@ -470,14 +496,30 @@ class MeasureEndpointTest(SimpleTestCase):
             {
                 "url": "https://example.com/photo.jpg",
                 "reference_size_mm": "215.9,279.4",
-                "scale": "2",
+                "scale": "0.001",
             },
         )
 
         self.assertEqual(response.status_code, 200)
         object_measurer.assert_called_once_with(
             reference_size_mm=(215.9, 279.4),
-            scale=2,
+            scale=0.001,
+        )
+
+    def test_measurement_kwargs_accept_fractional_scale(self):
+        kwargs = get_measurement_kwargs(
+            {
+                "reference_size_mm": "215.9,279.4",
+                "scale": "0.001",
+            }
+        )
+
+        self.assertEqual(
+            kwargs,
+            {
+                "reference_size_mm": (215.9, 279.4),
+                "scale": 0.001,
+            },
         )
 
     @patch("hello.views.requests.get")
@@ -564,3 +606,325 @@ class MeasureEndpointTest(SimpleTestCase):
         self.assertEqual(response.json()["error"], "Invalid measurement option")
         self.assertIn("greater than 0", response.json()["details"])
         requests_get.assert_not_called()
+
+    @patch("hello.views.convert_uploaded_dxf_to_svg")
+    def test_dxf_to_svg_accepts_upload_with_default_scaling(self, convert_dxf):
+        convert_dxf.return_value = '<svg xmlns="http://www.w3.org/2000/svg"></svg>'
+        upload = SimpleUploadedFile(
+            "part.dxf",
+            b"0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n",
+            content_type="application/dxf",
+        )
+
+        response = self.client.post("/dxf-to-svg/", {"file": upload})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.headers["Content-Type"],
+            "image/svg+xml; charset=utf-8",
+        )
+        self.assertEqual(
+            response.headers["Content-Disposition"],
+            'inline; filename="part.svg"',
+        )
+        self.assertEqual(response.headers["X-DXF-SVG-Scale"], "1.0")
+        self.assertEqual(response.headers["X-DXF-SVG-Units"], "px")
+        self.assertEqual(response.content.decode(), convert_dxf.return_value)
+
+        uploaded_file, options = convert_dxf.call_args.args
+        self.assertEqual(uploaded_file.name, "part.dxf")
+        self.assertEqual(options, DxfSvgOptions())
+
+    @patch("hello.views.convert_uploaded_dxf_to_svg")
+    def test_dxf_to_svg_accepts_custom_scaling_options(self, convert_dxf):
+        convert_dxf.return_value = '<svg xmlns="http://www.w3.org/2000/svg"></svg>'
+        upload = SimpleUploadedFile(
+            "drawing.dxf",
+            b"0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n",
+            content_type="application/dxf",
+        )
+
+        response = self.client.post(
+            "/dxf-to-svg/?page_width=500",
+            {
+                "file": upload,
+                "scale": "2.5",
+                "fit_page": "yes",
+                "margin": "4",
+                "page_height": "600",
+                "units": "mm",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            convert_dxf.call_args.args[1],
+            DxfSvgOptions(
+                scale=2.5,
+                fit_page=True,
+                margin=4.0,
+                page_width=500.0,
+                page_height=600.0,
+                units="mm",
+            ),
+        )
+
+    @patch("hello.views.convert_uploaded_dxf_to_svg")
+    def test_dxf_to_svg_rejects_missing_upload(self, convert_dxf):
+        response = self.client.post("/dxf-to-svg/", {"scale": "1"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Missing DXF upload")
+        convert_dxf.assert_not_called()
+
+    @patch("hello.views.convert_uploaded_dxf_to_svg")
+    def test_dxf_to_svg_rejects_invalid_scale(self, convert_dxf):
+        upload = SimpleUploadedFile(
+            "part.dxf",
+            b"0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n",
+            content_type="application/dxf",
+        )
+
+        response = self.client.post("/dxf-to-svg/", {"file": upload, "scale": "0"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Invalid DXF conversion option")
+        self.assertIn("greater than 0", response.json()["details"])
+        convert_dxf.assert_not_called()
+
+    @patch("hello.views.convert_uploaded_dxf_to_svg")
+    def test_dxf_to_svg_reports_invalid_dxf_upload(self, convert_dxf):
+        convert_dxf.side_effect = BadDxfUpload(
+            "Uploaded file is not a readable DXF document."
+        )
+        upload = SimpleUploadedFile(
+            "not-dxf.txt",
+            b"not a dxf",
+            content_type="text/plain",
+        )
+
+        response = self.client.post("/dxf-to-svg/", {"file": upload})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "Invalid DXF upload")
+        self.assertIn("not a readable DXF", response.json()["details"])
+
+    @unittest.skipUnless(
+        dxf_svg_converter_available(),
+        "ezdxf drawing dependencies are not installed",
+    )
+    def test_dxf_to_svg_removes_text_entities_before_rendering(self):
+        import ezdxf
+
+        doc = ezdxf.new()
+        modelspace = doc.modelspace()
+        modelspace.add_line((0, 0), (10, 0))
+        modelspace.add_text("MODEL LABEL")
+        modelspace.add_mtext("MODEL MULTILINE LABEL")
+
+        block = doc.blocks.new(name="LABELED_BLOCK")
+        block.add_line((0, 0), (0, 10))
+        block.add_text("BLOCK LABEL")
+        block.add_attdef("PIECE", text="BLOCK ATTRIBUTE LABEL")
+
+        insert = modelspace.add_blockref("LABELED_BLOCK", (0, 0))
+        insert.add_attrib("PIECE", "INSERT ATTRIBUTE LABEL")
+
+        _remove_dxf_text_entities(doc)
+
+        self.assertEqual(
+            [entity.dxftype() for entity in modelspace],
+            ["LINE", "INSERT"],
+        )
+        self.assertEqual([entity.dxftype() for entity in block], ["LINE"])
+        self.assertEqual(insert.attribs, [])
+
+    @unittest.skipUnless(
+        dxf_svg_converter_available(),
+        "ezdxf drawing dependencies are not installed",
+    )
+    def test_dxf_to_svg_excludes_label_text_from_rendered_svg(self):
+        import ezdxf
+
+        doc = ezdxf.new()
+        modelspace = doc.modelspace()
+        modelspace.add_lwpolyline(
+            [(0, 0), (10, 0), (10, 5), (0, 5), (0, 0)]
+        )
+        modelspace.add_text("DISTANT LABEL", height=100).set_placement((1000, 1000))
+
+        stream = io.StringIO()
+        doc.write(stream)
+        upload = SimpleUploadedFile(
+            "labeled-rectangle.dxf",
+            stream.getvalue().encode("utf-8"),
+            content_type="application/dxf",
+        )
+
+        response = self.client.post("/dxf-to-svg/", {"file": upload})
+
+        self.assertEqual(response.status_code, 200, response.content.decode())
+        svg = response.content.decode()
+        root = ET.fromstring(svg)
+        self.assertEqual(root.attrib["width"], "10mm")
+        self.assertEqual(root.attrib["height"], "5mm")
+        self.assertNotIn("DISTANT LABEL", svg)
+
+    @unittest.skipUnless(
+        dxf_svg_converter_available(),
+        "ezdxf drawing dependencies are not installed",
+    )
+    def test_dxf_to_svg_converts_real_dxf_when_ezdxf_is_available(self):
+        import ezdxf
+
+        doc = ezdxf.new()
+        doc.modelspace().add_lwpolyline(
+            [(0, 0), (10, 0), (10, 5), (0, 5), (0, 0)]
+        )
+        stream = io.StringIO()
+        doc.write(stream)
+        upload = SimpleUploadedFile(
+            "rectangle.dxf",
+            stream.getvalue().encode("utf-8"),
+            content_type="application/dxf",
+        )
+
+        response = self.client.post("/dxf-to-svg/", {"file": upload})
+
+        self.assertEqual(response.status_code, 200, response.content.decode())
+        svg = response.content.decode()
+        self.assertIn("<svg", svg)
+        self.assertIn("</svg>", svg)
+
+    @unittest.skipUnless(
+        dxf_svg_converter_available(),
+        "ezdxf drawing dependencies are not installed",
+    )
+    def test_dxf_to_svg_scales_path_geometry(self):
+        dxf_bytes = self.build_rectangle_dxf_bytes(width=1000, height=500)
+        path_sizes = {}
+
+        for scale in (1, 0.1, 0.001):
+            upload = SimpleUploadedFile(
+                "rectangle.dxf",
+                dxf_bytes,
+                content_type="application/dxf",
+            )
+
+            response = self.client.post(
+                "/dxf-to-svg/",
+                {
+                    "file": upload,
+                    "scale": str(scale),
+                },
+            )
+
+            self.assertEqual(response.status_code, 200, response.content.decode())
+            svg_markup = response.content.decode()
+            print(f"\n--- DXF to SVG scale={scale} ---\n{svg_markup}\n")
+            path_sizes[scale] = self.svg_first_path_size(svg_markup)
+
+        base_width, base_height = path_sizes[1]
+        for scale in (0.1, 0.001):
+            width, height = path_sizes[scale]
+            self.assertAlmostEqual(width, base_width * scale)
+            self.assertAlmostEqual(height, base_height * scale)
+
+    @staticmethod
+    def build_rectangle_dxf_bytes(width, height):
+        import ezdxf
+
+        doc = ezdxf.new()
+        doc.modelspace().add_lwpolyline(
+            [(0, 0), (width, 0), (width, height), (0, height), (0, 0)]
+        )
+        stream = io.StringIO()
+        doc.write(stream)
+        return stream.getvalue().encode("utf-8")
+
+    @classmethod
+    def svg_first_path_size(cls, svg_markup):
+        root = ET.fromstring(svg_markup)
+
+        for element in root.iter():
+            if element.tag.endswith("path"):
+                return cls.svg_path_size(element.attrib["d"])
+
+        raise AssertionError("SVG did not contain a path")
+
+    @classmethod
+    def svg_path_size(cls, path_data):
+        tokens = cls.SVG_PATH_TOKEN_PATTERN.findall(path_data)
+        index = 0
+        command = None
+        x = 0.0
+        y = 0.0
+        start_x = 0.0
+        start_y = 0.0
+        points = []
+
+        def is_command(token):
+            return token.isalpha()
+
+        def next_number():
+            nonlocal index
+            if index >= len(tokens) or is_command(tokens[index]):
+                raise AssertionError(f"Unexpected SVG path data: {path_data!r}")
+
+            value = float(tokens[index])
+            index += 1
+            return value
+
+        while index < len(tokens):
+            if is_command(tokens[index]):
+                command = tokens[index]
+                index += 1
+
+            if command is None:
+                raise AssertionError(f"Unexpected SVG path data: {path_data!r}")
+
+            relative = command.islower()
+            normalized = command.upper()
+
+            if normalized == "Z":
+                x = start_x
+                y = start_y
+                points.append((x, y))
+                command = None
+                continue
+
+            while index < len(tokens) and not is_command(tokens[index]):
+                if normalized in {"M", "L"}:
+                    next_x = next_number()
+                    next_y = next_number()
+                    if relative:
+                        next_x += x
+                        next_y += y
+                    x = next_x
+                    y = next_y
+                    points.append((x, y))
+
+                    if normalized == "M":
+                        start_x = x
+                        start_y = y
+                        command = "l" if relative else "L"
+                        normalized = "L"
+                elif normalized == "H":
+                    next_x = next_number()
+                    x = x + next_x if relative else next_x
+                    points.append((x, y))
+                elif normalized == "V":
+                    next_y = next_number()
+                    y = y + next_y if relative else next_y
+                    points.append((x, y))
+                else:
+                    raise AssertionError(
+                        f"Unsupported SVG path command in test: {command!r}"
+                    )
+
+        if not points:
+            raise AssertionError("SVG path did not contain any points")
+
+        x_values = [point[0] for point in points]
+        y_values = [point[1] for point in points]
+        return max(x_values) - min(x_values), max(y_values) - min(y_values)
