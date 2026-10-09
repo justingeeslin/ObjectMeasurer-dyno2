@@ -58,6 +58,7 @@ DXF_DEFAULT_SCALE = 1.0
 DXF_DEFAULT_MARGIN = 0.0
 DXF_DEFAULT_PAGE_SIZE = 0.0
 DXF_DEFAULT_UNITS = "px"
+DXF_OUTPUT_COORDINATE_SPACE = 1_000_000.0
 DXF_PAGE_UNITS = {
     "px": "px",
     "mm": "mm",
@@ -775,7 +776,11 @@ def render_dxf_path_to_svg(dxf_path, options):
         page_units,
         margins=layout.Margins.all(options.margin),
     )
-    settings = layout.Settings(scale=options.scale, fit_page=options.fit_page)
+    settings = layout.Settings(
+        scale=options.scale,
+        fit_page=options.fit_page,
+        output_coordinate_space=DXF_OUTPUT_COORDINATE_SPACE * options.scale,
+    )
     return backend.get_string(page, settings=settings)
 
 

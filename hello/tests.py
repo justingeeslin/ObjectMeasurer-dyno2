@@ -1,12 +1,14 @@
 import base64
 import importlib.util
 import io
+import re
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import urlparse
+from xml.etree import ElementTree as ET
 
 import cv2
 import numpy as np
@@ -22,6 +24,10 @@ from .views import (
 
 
 class MeasureEndpointTest(SimpleTestCase):
+    SVG_PATH_TOKEN_PATTERN = re.compile(
+        r"[MmLlHhVvZz]|[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+    )
+
     def configure_successful_measurement(self, requests_get, imdecode, object_measurer):
         requests_get.return_value = SimpleNamespace(
             ok=True,
@@ -717,3 +723,136 @@ class MeasureEndpointTest(SimpleTestCase):
         svg = response.content.decode()
         self.assertIn("<svg", svg)
         self.assertIn("</svg>", svg)
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("ezdxf"),
+        "ezdxf is not installed",
+    )
+    def test_dxf_to_svg_scales_path_geometry(self):
+        dxf_bytes = self.build_rectangle_dxf_bytes(width=1000, height=500)
+        path_sizes = {}
+
+        for scale in (1, 0.1, 0.001):
+            upload = SimpleUploadedFile(
+                "rectangle.dxf",
+                dxf_bytes,
+                content_type="application/dxf",
+            )
+
+            response = self.client.post(
+                "/dxf-to-svg/",
+                {
+                    "file": upload,
+                    "scale": str(scale),
+                },
+            )
+
+            self.assertEqual(response.status_code, 200, response.content.decode())
+            svg_markup = response.content.decode()
+            print(f"\n--- DXF to SVG scale={scale} ---\n{svg_markup}\n")
+            path_sizes[scale] = self.svg_first_path_size(svg_markup)
+
+        base_width, base_height = path_sizes[1]
+        for scale in (0.1, 0.001):
+            width, height = path_sizes[scale]
+            self.assertAlmostEqual(width, base_width * scale)
+            self.assertAlmostEqual(height, base_height * scale)
+
+    @staticmethod
+    def build_rectangle_dxf_bytes(width, height):
+        import ezdxf
+
+        doc = ezdxf.new()
+        doc.modelspace().add_lwpolyline(
+            [(0, 0), (width, 0), (width, height), (0, height), (0, 0)]
+        )
+        stream = io.StringIO()
+        doc.write(stream)
+        return stream.getvalue().encode("utf-8")
+
+    @classmethod
+    def svg_first_path_size(cls, svg_markup):
+        root = ET.fromstring(svg_markup)
+
+        for element in root.iter():
+            if element.tag.endswith("path"):
+                return cls.svg_path_size(element.attrib["d"])
+
+        raise AssertionError("SVG did not contain a path")
+
+    @classmethod
+    def svg_path_size(cls, path_data):
+        tokens = cls.SVG_PATH_TOKEN_PATTERN.findall(path_data)
+        index = 0
+        command = None
+        x = 0.0
+        y = 0.0
+        start_x = 0.0
+        start_y = 0.0
+        points = []
+
+        def is_command(token):
+            return token.isalpha()
+
+        def next_number():
+            nonlocal index
+            if index >= len(tokens) or is_command(tokens[index]):
+                raise AssertionError(f"Unexpected SVG path data: {path_data!r}")
+
+            value = float(tokens[index])
+            index += 1
+            return value
+
+        while index < len(tokens):
+            if is_command(tokens[index]):
+                command = tokens[index]
+                index += 1
+
+            if command is None:
+                raise AssertionError(f"Unexpected SVG path data: {path_data!r}")
+
+            relative = command.islower()
+            normalized = command.upper()
+
+            if normalized == "Z":
+                x = start_x
+                y = start_y
+                points.append((x, y))
+                command = None
+                continue
+
+            while index < len(tokens) and not is_command(tokens[index]):
+                if normalized in {"M", "L"}:
+                    next_x = next_number()
+                    next_y = next_number()
+                    if relative:
+                        next_x += x
+                        next_y += y
+                    x = next_x
+                    y = next_y
+                    points.append((x, y))
+
+                    if normalized == "M":
+                        start_x = x
+                        start_y = y
+                        command = "l" if relative else "L"
+                        normalized = "L"
+                elif normalized == "H":
+                    next_x = next_number()
+                    x = x + next_x if relative else next_x
+                    points.append((x, y))
+                elif normalized == "V":
+                    next_y = next_number()
+                    y = y + next_y if relative else next_y
+                    points.append((x, y))
+                else:
+                    raise AssertionError(
+                        f"Unsupported SVG path command in test: {command!r}"
+                    )
+
+        if not points:
+            raise AssertionError("SVG path did not contain any points")
+
+        x_values = [point[0] for point in points]
+        y_values = [point[1] for point in points]
+        return max(x_values) - min(x_values), max(y_values) - min(y_values)
