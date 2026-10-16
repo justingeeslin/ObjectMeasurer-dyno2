@@ -1,5 +1,6 @@
 import base64
 import io
+import math
 import re
 import tempfile
 import unittest
@@ -853,6 +854,53 @@ class MeasureEndpointTest(SimpleTestCase):
         dxf_svg_converter_available(),
         "ezdxf drawing dependencies are not installed",
     )
+    def test_dxf_to_svg_converts_square_fixtures_at_their_source_units(self):
+        fixture_directory = Path(__file__).resolve().parent.parent / "test-dxf"
+        fixtures = {
+            "squares cm.dxf": 10,
+            "squares inches-1.dxf": 25.4,
+            "squares inches.dxf": 25.4,
+            "squares mm-1.dxf": 1,
+            "squares mm.dxf": 1,
+        }
+
+        for filename, millimeters_per_drawing_unit in fixtures.items():
+            with self.subTest(filename=filename):
+                fixture_path = fixture_directory / filename
+                self.assertTrue(fixture_path.is_file(), f"Missing {fixture_path}")
+                upload = SimpleUploadedFile(
+                    filename,
+                    fixture_path.read_bytes(),
+                    content_type="application/dxf",
+                )
+
+                response = self.client.post(
+                    "/dxf-to-svg/",
+                    {
+                        "file": upload,
+                        "scale": str(millimeters_per_drawing_unit),
+                    },
+                )
+
+                self.assertEqual(
+                    response.status_code,
+                    200,
+                    response.content.decode(),
+                )
+                root = ET.fromstring(response.content.decode())
+                self.assertIsNone(
+                    root.find(".//{http://www.w3.org/2000/svg}rect"),
+                    "SVG should not contain a page-sized background rectangle",
+                )
+                self.assertEqual(
+                    self.svg_polygon_side_lengths_mm(root),
+                    [25.4, 50.8, 76.2],
+                )
+
+    @unittest.skipUnless(
+        dxf_svg_converter_available(),
+        "ezdxf drawing dependencies are not installed",
+    )
     def test_dxf_to_svg_scales_shape_geometry(self):
         dxf_bytes = self.build_rectangle_dxf_bytes(width=1000, height=500)
         shape_sizes = {}
@@ -906,6 +954,29 @@ class MeasureEndpointTest(SimpleTestCase):
                 return cls.svg_points_size(element.attrib["points"])
 
         raise AssertionError("SVG did not contain a path, polygon, or polyline")
+
+    @classmethod
+    def svg_polygon_side_lengths_mm(cls, root):
+        width = root.attrib["width"]
+        if not width.endswith("mm"):
+            raise AssertionError(f"Expected SVG width in millimeters, got {width!r}")
+
+        viewbox = [float(value) for value in root.attrib["viewBox"].split()]
+        if len(viewbox) != 4 or viewbox[2] <= 0:
+            raise AssertionError(f"Unexpected SVG viewBox: {root.attrib['viewBox']!r}")
+
+        millimeters_per_svg_unit = float(width.removesuffix("mm")) / viewbox[2]
+        side_lengths = set()
+        for polygon in root.findall(".//{http://www.w3.org/2000/svg}polygon"):
+            polygon_width, polygon_height = cls.svg_points_size(
+                polygon.attrib["points"]
+            )
+            width_mm = polygon_width * millimeters_per_svg_unit
+            height_mm = polygon_height * millimeters_per_svg_unit
+            if math.isclose(width_mm, height_mm, abs_tol=0.1):
+                side_lengths.add(round((width_mm + height_mm) / 2, 1))
+
+        return sorted(side_lengths)
 
     @classmethod
     def svg_points_size(cls, points_data):

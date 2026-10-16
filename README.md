@@ -119,7 +119,8 @@ which is the intended `1mm` drawing-unit to `1px` output mapping for millimeter
 DXF files.
 
 Text labels are removed before SVG rendering so DXF `TEXT`, `MTEXT`, `ATTRIB`,
-and `ATTDEF` entities do not become SVG path geometry.
+and `ATTDEF` entities do not become SVG path geometry. The renderer also omits
+its page-sized background rectangle, leaving only drawing geometry in the SVG.
 
 Straight-line geometry is emitted as SVG shapes where possible: closed line
 paths become `polygon` elements, open line paths become `polyline` elements,
@@ -133,6 +134,10 @@ Scaling and layout options can be sent as multipart fields or query parameters:
 - `page_width` and `page_height`: non-negative floats, default to `0` for auto
   page sizing
 - `units`: one of `px`, `mm`, `cm`, `in`, `inch`, or `pt`; defaults to `px`
+
+DXF files do not always declare their source units. For files whose drawing
+units are millimeters, centimeters, or inches, use `scale=1`, `scale=10`, or
+`scale=25.4` respectively to normalize their geometry to millimeters.
 
 Example with custom scaling:
 

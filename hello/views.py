@@ -824,6 +824,10 @@ def _dxf_svg_straight_path_points(path, path_command):
 
 def _build_shape_svg_backend(svg_module, path_command):
     class ShapeSvgRenderBackend(svg_module.SVGRenderBackend):
+        def __init__(self, page, settings):
+            super().__init__(page, settings)
+            self.root.remove(self.background)
+
         def add_stroked_shape(self, tag, points, properties):
             point_data = _format_svg_points(points)
             if not point_data:
@@ -891,7 +895,7 @@ def render_dxf_path_to_svg(dxf_path, options):
     context = RenderContext(doc)
     backend = _build_shape_svg_backend(svg, Command)
     render_config = config.Configuration(
-        background_policy=config.BackgroundPolicy.WHITE,
+        background_policy=config.BackgroundPolicy.OFF,
         color_policy=config.ColorPolicy.BLACK,
     )
     Frontend(context, backend, config=render_config).draw_layout(doc.modelspace())
