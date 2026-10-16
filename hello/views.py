@@ -59,7 +59,6 @@ DXF_DEFAULT_SCALE = 1.0
 DXF_DEFAULT_MARGIN = 0.0
 DXF_DEFAULT_PAGE_SIZE = 0.0
 DXF_DEFAULT_UNITS = "px"
-DXF_OUTPUT_COORDINATE_SPACE = 1_000_000.0
 DXF_SVG_POINT_CLOSE_TOLERANCE = 1e-6
 DXF_PAGE_UNITS = {
     "px": "px",
@@ -787,8 +786,53 @@ def _remove_dxf_text_entities(doc):
                 entity_space.delete_entity(entity)
 
 
+def _format_dxf_svg_number(value):
+    if math.isclose(value, 0.0, abs_tol=DXF_SVG_POINT_CLOSE_TOLERANCE):
+        value = 0.0
+    return _format_svg_number(value)
+
+
 def _format_svg_points(points):
-    return " ".join(f"{point.x:.0f},{point.y:.0f}" for point in points)
+    return " ".join(
+        f"{_format_dxf_svg_number(point.x)},{_format_dxf_svg_number(point.y)}"
+        for point in points
+    )
+
+
+def _format_dxf_svg_path(path, path_command, close=False):
+    if len(path) == 0:
+        return ""
+
+    def point_data(point):
+        return (
+            f"{_format_dxf_svg_number(point.x)} "
+            f"{_format_dxf_svg_number(point.y)}"
+        )
+
+    commands = [f"M {point_data(path.start)}"]
+    current = path.start
+    for command in path.commands():
+        end = command.end
+        if command.type == path_command.MOVE_TO:
+            commands.append(f"m {point_data(end - current)}")
+        elif command.type == path_command.LINE_TO:
+            commands.append(f"l {point_data(end - current)}")
+        elif command.type == path_command.CURVE3_TO:
+            commands.append(
+                f"q {point_data(command.ctrl - current)} "
+                f"{point_data(end - current)}"
+            )
+        elif command.type == path_command.CURVE4_TO:
+            commands.append(
+                f"c {point_data(command.ctrl1 - current)} "
+                f"{point_data(command.ctrl2 - current)} "
+                f"{point_data(end - current)}"
+            )
+        current = end
+
+    if close:
+        commands.append("Z")
+    return " ".join(commands)
 
 
 def _dxf_svg_points_are_closed(points):
@@ -827,6 +871,41 @@ def _build_shape_svg_backend(svg_module, path_command):
         def __init__(self, page, settings):
             super().__init__(page, settings)
             self.root.remove(self.background)
+            self.root.set(
+                "viewBox",
+                " ".join(
+                    (
+                        "0",
+                        "0",
+                        _format_dxf_svg_number(page.width_in_mm),
+                        _format_dxf_svg_number(page.height_in_mm),
+                    )
+                ),
+            )
+            self.stroke_width_scale = 1.0
+
+        @staticmethod
+        def make_path_str(path, close=False):
+            return _format_dxf_svg_path(path, path_command, close=close)
+
+        def resolve_stroke_width(self, width):
+            if self.lineweight_policy.name != "ABSOLUTE":
+                return super().resolve_stroke_width(width)
+
+            try:
+                return self._stroke_width_cache[width]
+            except KeyError:
+                pass
+
+            if self.lineweight_scaling:
+                stroke_width = (
+                    max(self.min_lineweight, width) * self.lineweight_scaling
+                )
+            else:
+                stroke_width = self.min_lineweight
+            formatted_width = _format_dxf_svg_number(stroke_width)
+            self._stroke_width_cache[width] = formatted_width
+            return formatted_width
 
         def add_stroked_shape(self, tag, points, properties):
             point_data = _format_svg_points(points)
@@ -909,9 +988,14 @@ def render_dxf_path_to_svg(dxf_path, options):
     settings = layout.Settings(
         scale=options.scale,
         fit_page=options.fit_page,
-        output_coordinate_space=DXF_OUTPUT_COORDINATE_SPACE * options.scale,
     )
-    return backend.get_string(page, settings=settings)
+    render_box = backend.player().bbox()
+    final_page = layout.Layout(render_box, flip_y=True).get_final_page(page, settings)
+    settings.output_coordinate_space = max(
+        final_page.width_in_mm,
+        final_page.height_in_mm,
+    )
+    return backend.get_string(page, settings=settings, render_box=render_box)
 
 
 def convert_uploaded_dxf_to_svg(uploaded_file, options):

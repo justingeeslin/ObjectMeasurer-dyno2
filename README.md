@@ -115,8 +115,8 @@ $ curl -X POST "http://localhost:5006/dxf-to-svg/" \
 
 The endpoint returns `image/svg+xml`. By default it auto-detects the SVG page
 size, uses pixel page units, disables fit-to-page scaling, and sets `scale=1`,
-which is the intended `1mm` drawing-unit to `1px` output mapping for millimeter
-DXF files.
+which maps one drawing unit to one millimeter SVG user unit for millimeter DXF
+files.
 
 Text labels are removed before SVG rendering so DXF `TEXT`, `MTEXT`, `ATTRIB`,
 and `ATTDEF` entities do not become SVG path geometry. The renderer also omits
@@ -124,7 +124,9 @@ its page-sized background rectangle, leaving only drawing geometry in the SVG.
 
 Straight-line geometry is emitted as SVG shapes where possible: closed line
 paths become `polygon` elements, open line paths become `polyline` elements,
-and curved geometry remains as `path` elements.
+and curved geometry remains as `path` elements. SVG coordinates use
+millimeters as user units, are translated near the `0,0` origin, and use a
+content-sized `viewBox` instead of a large fixed coordinate space.
 
 Scaling and layout options can be sent as multipart fields or query parameters:
 

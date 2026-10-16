@@ -20,6 +20,7 @@ from .views import (
     DxfConversionDependencyMissing,
     DxfSvgOptions,
     PORTRAIT_POSTER_BOARD_MM,
+    SVG_NUMBER_PATTERN,
     _load_ezdxf_drawing_modules,
     _remove_dxf_text_entities,
     get_measurement_kwargs,
@@ -797,7 +798,7 @@ class MeasureEndpointTest(SimpleTestCase):
         root = ET.fromstring(response.content.decode())
         polyline = root.find(".//{http://www.w3.org/2000/svg}polyline")
         self.assertIsNotNone(polyline)
-        self.assertEqual(polyline.attrib["points"], "0,500000 1000000,0")
+        self.assertEqual(polyline.attrib["points"], "0,5 10,0")
         self.assertIsNone(root.find(".//{http://www.w3.org/2000/svg}path"))
 
     @unittest.skipUnless(
@@ -822,7 +823,14 @@ class MeasureEndpointTest(SimpleTestCase):
 
         self.assertEqual(response.status_code, 200, response.content.decode())
         root = ET.fromstring(response.content.decode())
-        self.assertIsNotNone(root.find(".//{http://www.w3.org/2000/svg}path"))
+        self.assertEqual(root.attrib["viewBox"], "0 0 10 10")
+        path = root.find(".//{http://www.w3.org/2000/svg}path")
+        self.assertIsNotNone(path)
+        path_coordinates = [
+            float(match.group(0))
+            for match in SVG_NUMBER_PATTERN.finditer(path.attrib["d"])
+        ]
+        self.assertLessEqual(max(abs(value) for value in path_coordinates), 10)
 
     @unittest.skipUnless(
         dxf_svg_converter_available(),
@@ -893,9 +901,38 @@ class MeasureEndpointTest(SimpleTestCase):
                     "SVG should not contain a page-sized background rectangle",
                 )
                 self.assertEqual(
+                    [float(value) for value in root.attrib["viewBox"].split()],
+                    [0.0, 0.0, 123.6, 303.8],
+                )
+                self.assertEqual(
                     self.svg_polygon_side_lengths_mm(root),
                     [25.4, 50.8, 76.2],
                 )
+
+    @unittest.skipUnless(
+        dxf_svg_converter_available(),
+        "ezdxf drawing dependencies are not installed",
+    )
+    def test_dxf_to_svg_moves_offset_geometry_to_the_viewbox_origin(self):
+        dxf_bytes = self.build_rectangle_dxf_bytes(
+            width=10,
+            height=5,
+            origin=(10000, 20000),
+        )
+        upload = SimpleUploadedFile(
+            "offset-rectangle.dxf",
+            dxf_bytes,
+            content_type="application/dxf",
+        )
+
+        response = self.client.post("/dxf-to-svg/", {"file": upload})
+
+        self.assertEqual(response.status_code, 200, response.content.decode())
+        root = ET.fromstring(response.content.decode())
+        self.assertEqual(root.attrib["viewBox"], "0 0 10 5")
+        polygon = root.find(".//{http://www.w3.org/2000/svg}polygon")
+        self.assertIsNotNone(polygon)
+        self.assertEqual(polygon.attrib["points"], "0,5 10,5 10,0 0,0")
 
     @unittest.skipUnless(
         dxf_svg_converter_available(),
@@ -932,12 +969,19 @@ class MeasureEndpointTest(SimpleTestCase):
             self.assertAlmostEqual(height, base_height * scale)
 
     @staticmethod
-    def build_rectangle_dxf_bytes(width, height):
+    def build_rectangle_dxf_bytes(width, height, origin=(0, 0)):
         import ezdxf
 
         doc = ezdxf.new()
+        origin_x, origin_y = origin
         doc.modelspace().add_lwpolyline(
-            [(0, 0), (width, 0), (width, height), (0, height), (0, 0)]
+            [
+                (origin_x, origin_y),
+                (origin_x + width, origin_y),
+                (origin_x + width, origin_y + height),
+                (origin_x, origin_y + height),
+                (origin_x, origin_y),
+            ]
         )
         stream = io.StringIO()
         doc.write(stream)
