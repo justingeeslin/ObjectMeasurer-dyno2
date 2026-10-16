@@ -799,6 +799,167 @@ def _format_svg_points(points):
     )
 
 
+def _parse_svg_points(points_data):
+    values = [
+        float(match.group(0))
+        for match in SVG_NUMBER_PATTERN.finditer(points_data)
+    ]
+    if len(values) % 2:
+        return []
+    return list(zip(values[::2], values[1::2]))
+
+
+def _format_svg_point_pairs(points):
+    return " ".join(
+        f"{_format_dxf_svg_number(x)},{_format_dxf_svg_number(y)}"
+        for x, y in points
+    )
+
+
+def _svg_points_equal(first, second):
+    return math.isclose(
+        first[0],
+        second[0],
+        abs_tol=DXF_SVG_POINT_CLOSE_TOLERANCE,
+    ) and math.isclose(
+        first[1],
+        second[1],
+        abs_tol=DXF_SVG_POINT_CLOSE_TOLERANCE,
+    )
+
+
+def _svg_point_key(point):
+    tolerance = DXF_SVG_POINT_CLOSE_TOLERANCE
+    return round(point[0] / tolerance), round(point[1] / tolerance)
+
+
+def _clean_svg_points(points, closed=False):
+    cleaned = []
+    for point in points:
+        if not cleaned or not _svg_points_equal(point, cleaned[-1]):
+            cleaned.append(point)
+    if closed and len(cleaned) > 1 and _svg_points_equal(cleaned[0], cleaned[-1]):
+        cleaned.pop()
+    return cleaned
+
+
+def _canonical_svg_polygon(points):
+    keys = tuple(_svg_point_key(point) for point in points)
+    candidates = []
+    for sequence in (keys, tuple(reversed(keys))):
+        candidates.extend(
+            sequence[index:] + sequence[:index] for index in range(len(keys))
+        )
+    return min(candidates)
+
+
+def _consolidate_svg_polylines(entities):
+    from ezdxf import edgeminer
+
+    pending = {}
+    for index, element in enumerate(list(entities)):
+        if element.tag != "polyline":
+            continue
+
+        points = _clean_svg_points(_parse_svg_points(element.get("points", "")))
+        if len(points) < 2:
+            entities.remove(element)
+            continue
+
+        if _svg_points_equal(points[0], points[-1]):
+            polygon_points = _clean_svg_points(points, closed=True)
+            if len(polygon_points) >= 3:
+                element.tag = "polygon"
+                element.set("points", _format_svg_point_pairs(polygon_points))
+            continue
+
+        style = tuple(
+            sorted(
+                (name, value)
+                for name, value in element.attrib.items()
+                if name != "points"
+            )
+        )
+        pending.setdefault(style, []).append(
+            {
+                "element": element,
+                "index": index,
+                "points": points,
+            }
+        )
+
+    for style, polyline_data in pending.items():
+        edges = [
+            edgeminer.make_edge(
+                data["points"][0],
+                data["points"][-1],
+                payload=data,
+            )
+            for data in polyline_data
+        ]
+        deposit = edgeminer.Deposit(
+            edges,
+            gap_tol=DXF_SVG_POINT_CLOSE_TOLERANCE,
+        )
+        for chain in edgeminer.find_all_simple_chains(deposit):
+            if not edgeminer.is_loop(
+                chain,
+                gap_tol=DXF_SVG_POINT_CLOSE_TOLERANCE,
+            ):
+                continue
+
+            ordered_points = []
+            for edge in chain:
+                points = edge.payload["points"]
+                if edge.is_reverse:
+                    points = list(reversed(points))
+                ordered_points.extend(points if not ordered_points else points[1:])
+            polygon_points = _clean_svg_points(ordered_points, closed=True)
+            if len({_svg_point_key(point) for point in polygon_points}) < 3:
+                continue
+
+            insert_at = min(edge.payload["index"] for edge in chain)
+            for edge in chain:
+                entities.remove(edge.payload["element"])
+            polygon = ET.Element("polygon", dict(style))
+            polygon.set("points", _format_svg_point_pairs(polygon_points))
+            entities.insert(insert_at, polygon)
+
+
+def _deduplicate_svg_polygons(entities):
+    seen = set()
+    for element in list(entities):
+        if element.tag != "polygon":
+            continue
+
+        points = _clean_svg_points(
+            _parse_svg_points(element.get("points", "")),
+            closed=True,
+        )
+        if len({_svg_point_key(point) for point in points}) < 3:
+            entities.remove(element)
+            continue
+
+        element.set("points", _format_svg_point_pairs(points))
+        style = tuple(
+            sorted(
+                (name, value)
+                for name, value in element.attrib.items()
+                if name != "points"
+            )
+        )
+        key = style, _canonical_svg_polygon(points)
+        if key in seen:
+            entities.remove(element)
+        else:
+            seen.add(key)
+
+
+def _consolidate_svg_straight_shapes(entities):
+    _consolidate_svg_polylines(entities)
+    _deduplicate_svg_polygons(entities)
+
+
 def _format_dxf_svg_path(path, path_command, close=False):
     if len(path) == 0:
         return ""
@@ -870,6 +1031,7 @@ def _build_shape_svg_backend(svg_module, path_command):
     class ShapeSvgRenderBackend(svg_module.SVGRenderBackend):
         def __init__(self, page, settings):
             super().__init__(page, settings)
+            self._straight_shapes_consolidated = False
             self.root.remove(self.background)
             self.root.set(
                 "viewBox",
@@ -883,6 +1045,12 @@ def _build_shape_svg_backend(svg_module, path_command):
                 ),
             )
             self.stroke_width_scale = 1.0
+
+        def get_xml_root_element(self):
+            if not self._straight_shapes_consolidated:
+                _consolidate_svg_straight_shapes(self.entities)
+                self._straight_shapes_consolidated = True
+            return super().get_xml_root_element()
 
         @staticmethod
         def make_path_str(path, close=False):

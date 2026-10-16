@@ -805,6 +805,37 @@ class MeasureEndpointTest(SimpleTestCase):
         dxf_svg_converter_available(),
         "ezdxf drawing dependencies are not installed",
     )
+    def test_dxf_to_svg_consolidates_connected_lines_into_polygon(self):
+        import ezdxf
+
+        doc = ezdxf.new()
+        modelspace = doc.modelspace()
+        modelspace.add_line((10, 5), (10, 0))
+        modelspace.add_line((0, 0), (0, 5))
+        modelspace.add_line((10, 0), (0, 0))
+        modelspace.add_line((0, 5), (10, 5))
+
+        stream = io.StringIO()
+        doc.write(stream)
+        upload = SimpleUploadedFile(
+            "line-segment-rectangle.dxf",
+            stream.getvalue().encode("utf-8"),
+            content_type="application/dxf",
+        )
+
+        response = self.client.post("/dxf-to-svg/", {"file": upload})
+
+        self.assertEqual(response.status_code, 200, response.content.decode())
+        root = ET.fromstring(response.content.decode())
+        polygons = root.findall(".//{http://www.w3.org/2000/svg}polygon")
+        self.assertEqual(len(polygons), 1)
+        self.assertEqual(self.svg_points_size(polygons[0].attrib["points"]), (10, 5))
+        self.assertIsNone(root.find(".//{http://www.w3.org/2000/svg}polyline"))
+
+    @unittest.skipUnless(
+        dxf_svg_converter_available(),
+        "ezdxf drawing dependencies are not installed",
+    )
     def test_dxf_to_svg_keeps_curved_geometry_as_path(self):
         import ezdxf
 
@@ -907,6 +938,14 @@ class MeasureEndpointTest(SimpleTestCase):
                 self.assertEqual(
                     self.svg_polygon_side_lengths_mm(root),
                     [25.4, 50.8, 76.2],
+                )
+                self.assertEqual(
+                    len(root.findall(".//{http://www.w3.org/2000/svg}polygon")),
+                    3,
+                )
+                self.assertEqual(
+                    len(root.findall(".//{http://www.w3.org/2000/svg}polyline")),
+                    3,
                 )
 
     @unittest.skipUnless(
