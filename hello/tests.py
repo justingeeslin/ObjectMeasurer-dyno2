@@ -836,6 +836,146 @@ class MeasureEndpointTest(SimpleTestCase):
         dxf_svg_converter_available(),
         "ezdxf drawing dependencies are not installed",
     )
+    def test_dxf_to_svg_keeps_outer_seam_allowance_outline(self):
+        import ezdxf
+
+        doc = ezdxf.new()
+        doc.layers.add("SIZE_M")
+        modelspace = doc.modelspace()
+        modelspace.add_lwpolyline(
+            [(0, 0), (12, 0), (12, 7), (0, 7)],
+            close=True,
+            dxfattribs={"layer": "SIZE_M"},
+        )
+        modelspace.add_lwpolyline(
+            [(1, 1), (11, 1), (11, 6), (1, 6)],
+            close=True,
+            dxfattribs={"layer": "SIZE_M"},
+        )
+
+        stream = io.StringIO()
+        doc.write(stream)
+        upload = SimpleUploadedFile(
+            "piece-with-seam-allowance.dxf",
+            stream.getvalue().encode("utf-8"),
+            content_type="application/dxf",
+        )
+
+        response = self.client.post("/dxf-to-svg/", {"file": upload})
+
+        self.assertEqual(response.status_code, 200, response.content.decode())
+        svg = response.content.decode()
+        root = ET.fromstring(svg)
+        polygons = root.findall(".//{http://www.w3.org/2000/svg}polygon")
+        self.assertEqual(len(polygons), 1)
+        self.assertEqual(self.svg_points_size(polygons[0].attrib["points"]), (12, 7))
+        self.assertNotIn("data-dxf-layer", svg)
+
+    @unittest.skipUnless(
+        dxf_svg_converter_available(),
+        "ezdxf drawing dependencies are not installed",
+    )
+    def test_dxf_to_svg_keeps_nested_outlines_from_different_grading_layers(self):
+        import ezdxf
+
+        doc = ezdxf.new()
+        doc.layers.add("SIZE_M")
+        doc.layers.add("SIZE_S")
+        modelspace = doc.modelspace()
+        modelspace.add_lwpolyline(
+            [(0, 0), (12, 0), (12, 7), (0, 7)],
+            close=True,
+            dxfattribs={"layer": "SIZE_M"},
+        )
+        modelspace.add_lwpolyline(
+            [(1, 1), (11, 1), (11, 6), (1, 6)],
+            close=True,
+            dxfattribs={"layer": "SIZE_S"},
+        )
+
+        stream = io.StringIO()
+        doc.write(stream)
+        upload = SimpleUploadedFile(
+            "graded-pieces.dxf",
+            stream.getvalue().encode("utf-8"),
+            content_type="application/dxf",
+        )
+
+        response = self.client.post("/dxf-to-svg/", {"file": upload})
+
+        self.assertEqual(response.status_code, 200, response.content.decode())
+        root = ET.fromstring(response.content.decode())
+        polygons = root.findall(".//{http://www.w3.org/2000/svg}polygon")
+        self.assertEqual(len(polygons), 2)
+
+    @unittest.skipUnless(
+        dxf_svg_converter_available(),
+        "ezdxf drawing dependencies are not installed",
+    )
+    def test_dxf_to_svg_keeps_small_internal_pattern_marks(self):
+        import ezdxf
+
+        doc = ezdxf.new()
+        doc.layers.add("SIZE_M")
+        modelspace = doc.modelspace()
+        modelspace.add_lwpolyline(
+            [(0, 0), (12, 0), (12, 7), (0, 7)],
+            close=True,
+            dxfattribs={"layer": "SIZE_M"},
+        )
+        modelspace.add_lwpolyline(
+            [(5, 2.5), (7, 2.5), (7, 4.5), (5, 4.5)],
+            close=True,
+            dxfattribs={"layer": "SIZE_M"},
+        )
+
+        stream = io.StringIO()
+        doc.write(stream)
+        upload = SimpleUploadedFile(
+            "piece-with-internal-mark.dxf",
+            stream.getvalue().encode("utf-8"),
+            content_type="application/dxf",
+        )
+
+        response = self.client.post("/dxf-to-svg/", {"file": upload})
+
+        self.assertEqual(response.status_code, 200, response.content.decode())
+        root = ET.fromstring(response.content.decode())
+        polygons = root.findall(".//{http://www.w3.org/2000/svg}polygon")
+        self.assertEqual(len(polygons), 2)
+
+    @unittest.skipUnless(
+        dxf_svg_converter_available(),
+        "ezdxf drawing dependencies are not installed",
+    )
+    def test_dxf_to_svg_keeps_outer_curved_seam_allowance_outline(self):
+        import ezdxf
+
+        doc = ezdxf.new()
+        doc.layers.add("SIZE_M")
+        modelspace = doc.modelspace()
+        modelspace.add_circle((10, 10), radius=10, dxfattribs={"layer": "SIZE_M"})
+        modelspace.add_circle((10, 10), radius=8, dxfattribs={"layer": "SIZE_M"})
+
+        stream = io.StringIO()
+        doc.write(stream)
+        upload = SimpleUploadedFile(
+            "curved-piece-with-seam-allowance.dxf",
+            stream.getvalue().encode("utf-8"),
+            content_type="application/dxf",
+        )
+
+        response = self.client.post("/dxf-to-svg/", {"file": upload})
+
+        self.assertEqual(response.status_code, 200, response.content.decode())
+        root = ET.fromstring(response.content.decode())
+        paths = root.findall(".//{http://www.w3.org/2000/svg}path")
+        self.assertEqual(len(paths), 1)
+
+    @unittest.skipUnless(
+        dxf_svg_converter_available(),
+        "ezdxf drawing dependencies are not installed",
+    )
     def test_dxf_to_svg_keeps_curved_geometry_as_path(self):
         import ezdxf
 

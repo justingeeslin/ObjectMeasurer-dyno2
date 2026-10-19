@@ -60,6 +60,10 @@ DXF_DEFAULT_MARGIN = 0.0
 DXF_DEFAULT_PAGE_SIZE = 0.0
 DXF_DEFAULT_UNITS = "px"
 DXF_SVG_POINT_CLOSE_TOLERANCE = 1e-6
+DXF_SVG_CURVE_FLATTENING_DISTANCE = 0.1
+DXF_SVG_LAYER_ATTRIBUTE = "data-dxf-layer"
+DXF_SEAM_ALLOWANCE_MIN_AREA_RATIO = 0.25
+DXF_SEAM_ALLOWANCE_MIN_DIMENSION_RATIO = 0.5
 DXF_PAGE_UNITS = {
     "px": "px",
     "mm": "mm",
@@ -853,6 +857,151 @@ def _canonical_svg_polygon(points):
     return min(candidates)
 
 
+def _svg_polygon_area(points):
+    return abs(
+        sum(
+            start[0] * end[1] - end[0] * start[1]
+            for start, end in zip(points, points[1:] + points[:1])
+        )
+        / 2
+    )
+
+
+def _svg_polygon_bbox(points):
+    x_values = [point[0] for point in points]
+    y_values = [point[1] for point in points]
+    return min(x_values), min(y_values), max(x_values), max(y_values)
+
+
+def _svg_point_is_on_segment(point, start, end):
+    point_x, point_y = point
+    start_x, start_y = start
+    end_x, end_y = end
+    cross_product = (point_y - start_y) * (end_x - start_x) - (
+        point_x - start_x
+    ) * (end_y - start_y)
+    segment_length = math.hypot(end_x - start_x, end_y - start_y)
+    if not math.isclose(
+        cross_product,
+        0.0,
+        abs_tol=DXF_SVG_POINT_CLOSE_TOLERANCE * max(segment_length, 1.0),
+    ):
+        return False
+
+    return (
+        min(start_x, end_x) - DXF_SVG_POINT_CLOSE_TOLERANCE
+        <= point_x
+        <= max(start_x, end_x) + DXF_SVG_POINT_CLOSE_TOLERANCE
+        and min(start_y, end_y) - DXF_SVG_POINT_CLOSE_TOLERANCE
+        <= point_y
+        <= max(start_y, end_y) + DXF_SVG_POINT_CLOSE_TOLERANCE
+    )
+
+
+def _svg_polygon_contains_point(points, point):
+    inside = False
+    for start, end in zip(points, points[1:] + points[:1]):
+        if _svg_point_is_on_segment(point, start, end):
+            return True
+
+        if (start[1] > point[1]) == (end[1] > point[1]):
+            continue
+
+        intersection_x = start[0] + (
+            (point[1] - start[1])
+            * (end[0] - start[0])
+            / (end[1] - start[1])
+        )
+        if intersection_x > point[0]:
+            inside = not inside
+
+    return inside
+
+
+def _svg_bbox_contains(outer_bbox, inner_bbox):
+    tolerance = DXF_SVG_POINT_CLOSE_TOLERANCE
+    return (
+        outer_bbox[0] - tolerance <= inner_bbox[0]
+        and outer_bbox[1] - tolerance <= inner_bbox[1]
+        and outer_bbox[2] + tolerance >= inner_bbox[2]
+        and outer_bbox[3] + tolerance >= inner_bbox[3]
+    )
+
+
+def _svg_boundaries_are_comparable(inner, outer):
+    if inner["area"] / outer["area"] < DXF_SEAM_ALLOWANCE_MIN_AREA_RATIO:
+        return False
+
+    inner_bbox = inner["bbox"]
+    outer_bbox = outer["bbox"]
+    inner_width = inner_bbox[2] - inner_bbox[0]
+    inner_height = inner_bbox[3] - inner_bbox[1]
+    outer_width = outer_bbox[2] - outer_bbox[0]
+    outer_height = outer_bbox[3] - outer_bbox[1]
+    if outer_width <= 0 or outer_height <= 0:
+        return False
+
+    return min(
+        inner_width / outer_width,
+        inner_height / outer_height,
+    ) >= DXF_SEAM_ALLOWANCE_MIN_DIMENSION_RATIO
+
+
+def _remove_internal_svg_piece_shapes(entities, curved_boundaries=None):
+    curved_boundaries = curved_boundaries or {}
+    boundaries = []
+    for element in entities:
+        if element.tag == "polygon":
+            points = _clean_svg_points(
+                _parse_svg_points(element.get("points", "")),
+                closed=True,
+            )
+        else:
+            points = curved_boundaries.get(id(element), [])
+
+        if len({_svg_point_key(point) for point in points}) < 3:
+            continue
+
+        area = _svg_polygon_area(points)
+        if math.isclose(area, 0.0, abs_tol=DXF_SVG_POINT_CLOSE_TOLERANCE):
+            continue
+
+        boundaries.append(
+            {
+                "element": element,
+                "layer": element.get(DXF_SVG_LAYER_ATTRIBUTE, ""),
+                "points": points,
+                "area": area,
+                "bbox": _svg_polygon_bbox(points),
+            }
+        )
+
+    for inner in boundaries:
+        possible_outer_boundaries = (
+            outer
+            for outer in boundaries
+            if outer["layer"] == inner["layer"]
+            and outer["area"] > inner["area"]
+            and _svg_bbox_contains(outer["bbox"], inner["bbox"])
+            and _svg_boundaries_are_comparable(inner, outer)
+        )
+        for outer in sorted(
+            possible_outer_boundaries,
+            key=lambda boundary: boundary["area"],
+        ):
+            if all(
+                _svg_polygon_contains_point(outer["points"], point)
+                for point in inner["points"]
+            ):
+                entities.remove(inner["element"])
+                break
+
+
+def _remove_svg_dxf_metadata(entities):
+    for element in entities:
+        element.attrib.pop(DXF_SVG_LAYER_ATTRIBUTE, None)
+
+
 def _consolidate_svg_polylines(entities):
     from ezdxf import edgeminer
 
@@ -945,7 +1094,7 @@ def _deduplicate_svg_polygons(entities):
             sorted(
                 (name, value)
                 for name, value in element.attrib.items()
-                if name != "points"
+                if name not in {"points", DXF_SVG_LAYER_ATTRIBUTE}
             )
         )
         key = style, _canonical_svg_polygon(points)
@@ -955,9 +1104,11 @@ def _deduplicate_svg_polygons(entities):
             seen.add(key)
 
 
-def _consolidate_svg_straight_shapes(entities):
+def _consolidate_svg_straight_shapes(entities, curved_boundaries=None):
     _consolidate_svg_polylines(entities)
+    _remove_internal_svg_piece_shapes(entities, curved_boundaries)
     _deduplicate_svg_polygons(entities)
+    _remove_svg_dxf_metadata(entities)
 
 
 def _format_dxf_svg_path(path, path_command, close=False):
@@ -1032,6 +1183,7 @@ def _build_shape_svg_backend(svg_module, path_command):
         def __init__(self, page, settings):
             super().__init__(page, settings)
             self._straight_shapes_consolidated = False
+            self._curved_boundaries = {}
             self.root.remove(self.background)
             self.root.set(
                 "viewBox",
@@ -1048,7 +1200,10 @@ def _build_shape_svg_backend(svg_module, path_command):
 
         def get_xml_root_element(self):
             if not self._straight_shapes_consolidated:
-                _consolidate_svg_straight_shapes(self.entities)
+                _consolidate_svg_straight_shapes(
+                    self.entities,
+                    self._curved_boundaries,
+                )
                 self._straight_shapes_consolidated = True
             return super().get_xml_root_element()
 
@@ -1081,6 +1236,7 @@ def _build_shape_svg_backend(svg_module, path_command):
                 return
 
             element = ET.SubElement(self.entities, tag, points=point_data)
+            element.set(DXF_SVG_LAYER_ATTRIBUTE, properties.layer)
             stroke_width = self.resolve_stroke_width(properties.lineweight)
             stroke_color, stroke_opacity = self.resolve_color(properties.color)
             cls = self.styles.get_class(
@@ -1096,6 +1252,7 @@ def _build_shape_svg_backend(svg_module, path_command):
                 return
 
             element = ET.SubElement(self.entities, tag, points=point_data)
+            element.set(DXF_SVG_LAYER_ATTRIBUTE, properties.layer)
             fill_color, fill_opacity = self.resolve_color(properties.color)
             cls = self.styles.get_class(fill=fill_color, fill_opacity=fill_opacity)
             element.set("class", cls)
@@ -1113,7 +1270,25 @@ def _build_shape_svg_backend(svg_module, path_command):
         def draw_path(self, path, properties):
             points = _dxf_svg_straight_path_points(path, path_command)
             if points is None:
-                return super().draw_path(path, properties)
+                element_count = len(self.entities)
+                super().draw_path(path, properties)
+                if len(self.entities) == element_count:
+                    return
+
+                element = self.entities[-1]
+                element.set(DXF_SVG_LAYER_ATTRIBUTE, properties.layer)
+                if path.is_closed and not path.has_sub_paths:
+                    boundary = _clean_svg_points(
+                        [
+                            (point.x, point.y)
+                            for point in path.flattening(
+                                DXF_SVG_CURVE_FLATTENING_DISTANCE
+                            )
+                        ],
+                        closed=True,
+                    )
+                    self._curved_boundaries[id(element)] = boundary
+                return
 
             if _dxf_svg_points_are_closed(points):
                 self.add_stroked_shape("polygon", points[:-1], properties)

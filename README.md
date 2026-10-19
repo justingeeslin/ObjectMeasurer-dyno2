@@ -129,7 +129,9 @@ millimeters as user units, are translated near the `0,0` origin, and use a
 content-sized `viewBox` instead of a large fixed coordinate space. Connected
 straight segments that unambiguously form a closed loop are consolidated into
 a polygon; duplicate polygons and zero-length point-marker polylines are
-omitted.
+omitted. When a pattern-piece outline is enclosed by a comparable seam-allowance
+outline on the same DXF layer, only the outer seam-allowance outline is exported.
+Small internal marks and nested outlines on different grading layers are kept.
 
 Scaling and layout options can be sent as multipart fields or query parameters:
 
