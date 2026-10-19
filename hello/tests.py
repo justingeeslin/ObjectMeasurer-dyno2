@@ -875,6 +875,93 @@ class MeasureEndpointTest(SimpleTestCase):
         dxf_svg_converter_available(),
         "ezdxf drawing dependencies are not installed",
     )
+    def test_dxf_to_svg_keeps_outer_outline_across_pattern_block_layers(self):
+        import ezdxf
+
+        doc = ezdxf.new()
+        doc.layers.add("1")
+        doc.layers.add("14")
+        piece = doc.blocks.new(name="SQUARE_PIECE")
+        piece.add_lwpolyline(
+            [(0.5, 0.5), (3.5, 0.5), (3.5, 3.5), (0.5, 3.5)],
+            close=True,
+            dxfattribs={"layer": "1"},
+        )
+        piece.add_lwpolyline(
+            [(0, 0), (4, 0), (4, 4), (0, 4)],
+            close=True,
+            dxfattribs={"layer": "14"},
+        )
+        doc.modelspace().add_blockref("SQUARE_PIECE", (0, 0))
+
+        stream = io.StringIO()
+        doc.write(stream)
+        upload = SimpleUploadedFile(
+            "block-piece-with-seam-allowance.dxf",
+            stream.getvalue().encode("utf-8"),
+            content_type="application/dxf",
+        )
+
+        response = self.client.post(
+            "/dxf-to-svg/",
+            {"file": upload, "scale": "25.4"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.content.decode())
+        svg = response.content.decode()
+        root = ET.fromstring(svg)
+        polygons = root.findall(".//{http://www.w3.org/2000/svg}polygon")
+        self.assertEqual(len(polygons), 1)
+        self.assertEqual(
+            self.svg_points_size(polygons[0].attrib["points"]),
+            (101.6, 101.6),
+        )
+        self.assertNotIn("data-dxf-pattern-piece", svg)
+
+    @unittest.skipUnless(
+        dxf_svg_converter_available(),
+        "ezdxf drawing dependencies are not installed",
+    )
+    def test_dxf_to_svg_keeps_nested_outlines_from_separate_pattern_blocks(self):
+        import ezdxf
+
+        doc = ezdxf.new()
+        doc.layers.add("1")
+        outer_piece = doc.blocks.new(name="OUTER_PIECE")
+        outer_piece.add_lwpolyline(
+            [(0, 0), (4, 0), (4, 4), (0, 4)],
+            close=True,
+            dxfattribs={"layer": "1"},
+        )
+        inner_piece = doc.blocks.new(name="INNER_PIECE")
+        inner_piece.add_lwpolyline(
+            [(0.5, 0.5), (3.5, 0.5), (3.5, 3.5), (0.5, 3.5)],
+            close=True,
+            dxfattribs={"layer": "1"},
+        )
+        modelspace = doc.modelspace()
+        modelspace.add_blockref("OUTER_PIECE", (0, 0))
+        modelspace.add_blockref("INNER_PIECE", (0, 0))
+
+        stream = io.StringIO()
+        doc.write(stream)
+        upload = SimpleUploadedFile(
+            "separate-nested-block-pieces.dxf",
+            stream.getvalue().encode("utf-8"),
+            content_type="application/dxf",
+        )
+
+        response = self.client.post("/dxf-to-svg/", {"file": upload})
+
+        self.assertEqual(response.status_code, 200, response.content.decode())
+        root = ET.fromstring(response.content.decode())
+        polygons = root.findall(".//{http://www.w3.org/2000/svg}polygon")
+        self.assertEqual(len(polygons), 2)
+
+    @unittest.skipUnless(
+        dxf_svg_converter_available(),
+        "ezdxf drawing dependencies are not installed",
+    )
     def test_dxf_to_svg_keeps_nested_outlines_from_different_grading_layers(self):
         import ezdxf
 

@@ -62,6 +62,7 @@ DXF_DEFAULT_UNITS = "px"
 DXF_SVG_POINT_CLOSE_TOLERANCE = 1e-6
 DXF_SVG_CURVE_FLATTENING_DISTANCE = 0.1
 DXF_SVG_LAYER_ATTRIBUTE = "data-dxf-layer"
+DXF_SVG_PATTERN_PIECE_ATTRIBUTE = "data-dxf-pattern-piece"
 DXF_SEAM_ALLOWANCE_MIN_AREA_RATIO = 0.25
 DXF_SEAM_ALLOWANCE_MIN_DIMENSION_RATIO = 0.5
 DXF_PAGE_UNITS = {
@@ -970,6 +971,10 @@ def _remove_internal_svg_piece_shapes(entities, curved_boundaries=None):
             {
                 "element": element,
                 "layer": element.get(DXF_SVG_LAYER_ATTRIBUTE, ""),
+                "pattern_piece": element.get(
+                    DXF_SVG_PATTERN_PIECE_ATTRIBUTE,
+                    "",
+                ),
                 "points": points,
                 "area": area,
                 "bbox": _svg_polygon_bbox(points),
@@ -980,7 +985,17 @@ def _remove_internal_svg_piece_shapes(entities, curved_boundaries=None):
         possible_outer_boundaries = (
             outer
             for outer in boundaries
-            if outer["layer"] == inner["layer"]
+            if (
+                (
+                    inner["pattern_piece"]
+                    and outer["pattern_piece"] == inner["pattern_piece"]
+                )
+                or (
+                    not inner["pattern_piece"]
+                    and not outer["pattern_piece"]
+                    and outer["layer"] == inner["layer"]
+                )
+            )
             and outer["area"] > inner["area"]
             and _svg_bbox_contains(outer["bbox"], inner["bbox"])
             and _svg_boundaries_are_comparable(inner, outer)
@@ -1000,6 +1015,7 @@ def _remove_internal_svg_piece_shapes(entities, curved_boundaries=None):
 def _remove_svg_dxf_metadata(entities):
     for element in entities:
         element.attrib.pop(DXF_SVG_LAYER_ATTRIBUTE, None)
+        element.attrib.pop(DXF_SVG_PATTERN_PIECE_ATTRIBUTE, None)
 
 
 def _consolidate_svg_polylines(entities):
@@ -1094,7 +1110,12 @@ def _deduplicate_svg_polygons(entities):
             sorted(
                 (name, value)
                 for name, value in element.attrib.items()
-                if name not in {"points", DXF_SVG_LAYER_ATTRIBUTE}
+                if name
+                not in {
+                    "points",
+                    DXF_SVG_LAYER_ATTRIBUTE,
+                    DXF_SVG_PATTERN_PIECE_ATTRIBUTE,
+                }
             )
         )
         key = style, _canonical_svg_polygon(points)
@@ -1178,7 +1199,13 @@ def _dxf_svg_straight_path_points(path, path_command):
     return points
 
 
-def _build_shape_svg_backend(svg_module, path_command):
+def _build_shape_svg_backend(
+    svg_module,
+    path_command,
+    pattern_piece_handles=None,
+):
+    pattern_piece_handles = pattern_piece_handles or set()
+
     class ShapeSvgRenderBackend(svg_module.SVGRenderBackend):
         def __init__(self, page, settings):
             super().__init__(page, settings)
@@ -1230,13 +1257,19 @@ def _build_shape_svg_backend(svg_module, path_command):
             self._stroke_width_cache[width] = formatted_width
             return formatted_width
 
+        @staticmethod
+        def add_dxf_metadata(element, properties):
+            element.set(DXF_SVG_LAYER_ATTRIBUTE, properties.layer)
+            if properties.handle in pattern_piece_handles:
+                element.set(DXF_SVG_PATTERN_PIECE_ATTRIBUTE, properties.handle)
+
         def add_stroked_shape(self, tag, points, properties):
             point_data = _format_svg_points(points)
             if not point_data:
                 return
 
             element = ET.SubElement(self.entities, tag, points=point_data)
-            element.set(DXF_SVG_LAYER_ATTRIBUTE, properties.layer)
+            self.add_dxf_metadata(element, properties)
             stroke_width = self.resolve_stroke_width(properties.lineweight)
             stroke_color, stroke_opacity = self.resolve_color(properties.color)
             cls = self.styles.get_class(
@@ -1252,7 +1285,7 @@ def _build_shape_svg_backend(svg_module, path_command):
                 return
 
             element = ET.SubElement(self.entities, tag, points=point_data)
-            element.set(DXF_SVG_LAYER_ATTRIBUTE, properties.layer)
+            self.add_dxf_metadata(element, properties)
             fill_color, fill_opacity = self.resolve_color(properties.color)
             cls = self.styles.get_class(fill=fill_color, fill_opacity=fill_opacity)
             element.set("class", cls)
@@ -1276,7 +1309,7 @@ def _build_shape_svg_backend(svg_module, path_command):
                     return
 
                 element = self.entities[-1]
-                element.set(DXF_SVG_LAYER_ATTRIBUTE, properties.layer)
+                self.add_dxf_metadata(element, properties)
                 if path.is_closed and not path.has_sub_paths:
                     boundary = _clean_svg_points(
                         [
@@ -1313,9 +1346,18 @@ def render_dxf_path_to_svg(dxf_path, options):
     doc = _read_dxf_document(dxf_path, ezdxf, recover)
     _remove_dxf_text_entities(doc)
     page_units = getattr(layout.Units, DXF_PAGE_UNITS[options.units])
+    pattern_piece_handles = {
+        entity.dxf.handle
+        for entity in doc.modelspace()
+        if entity.dxftype() == "INSERT"
+    }
 
     context = RenderContext(doc)
-    backend = _build_shape_svg_backend(svg, Command)
+    backend = _build_shape_svg_backend(
+        svg,
+        Command,
+        pattern_piece_handles,
+    )
     render_config = config.Configuration(
         background_policy=config.BackgroundPolicy.OFF,
         color_policy=config.ColorPolicy.BLACK,
