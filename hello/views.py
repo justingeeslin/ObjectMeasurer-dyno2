@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import tempfile
 import uuid
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 from xml.etree import ElementTree as ET
 
 import cv2
@@ -649,86 +649,8 @@ def serialize_measurement(measurement):
     return serialized
 
 
-def _build_example_link(request, title, description, params):
-    query_string = urlencode(params)
-    href = request.build_absolute_uri(f"/?{query_string}")
-
-    return {
-        "title": title,
-        "description": description,
-        "href": href,
-        "path": f"/?{query_string}",
-        "curl": f'curl "{href}"',
-    }
-
-
-def build_index_examples(request):
-    return [
-        _build_example_link(
-            request,
-            "Measure an object",
-            "Uses the default portrait poster-board reference size.",
-            {"url": EXAMPLE_IMAGE_URL},
-        ),
-        _build_example_link(
-            request,
-            "Use ReferenceSurfaceMeasurer",
-            "Measures with the alternate reference-surface implementation.",
-            {
-                "url": EXAMPLE_IMAGE_URL,
-                MEASURER_PARAM: REFERENCE_SURFACE_MEASURER_NAME,
-            },
-        ),
-        _build_example_link(
-            request,
-            "Use a letter-size reference",
-            "Overrides the reference object dimensions in millimeters.",
-            {
-                "url": EXAMPLE_IMAGE_URL,
-                REFERENCE_SIZE_PARAM: f"{LETTER_MM[0]},{LETTER_MM[1]}",
-            },
-        ),
-        _build_example_link(
-            request,
-            "Include structured debug data",
-            "Adds metadata, trace information, and image descriptors to the JSON.",
-            {
-                "url": EXAMPLE_IMAGE_URL,
-                DEBUG_PARAM: "1",
-            },
-        ),
-        _build_example_link(
-            request,
-            "Include debug images",
-            "Adds base64-encoded PNG debug images that clients can render.",
-            {
-                "url": EXAMPLE_IMAGE_URL,
-                DEBUG_IMAGES_PARAM: "1",
-            },
-        ),
-        _build_example_link(
-            request,
-            "Return debug image URLs",
-            "Saves debug images temporarily and returns public URLs for inspection.",
-            {
-                "url": EXAMPLE_IMAGE_URL,
-                DEBUG_IMAGE_URLS_PARAM: "1",
-            },
-        ),
-    ]
-
-
 def index(request):
-    return render(
-        request,
-        "index.html",
-        {
-            "examples": build_index_examples(request),
-            "example_image_url": EXAMPLE_IMAGE_URL,
-            "default_reference_size": PORTRAIT_POSTER_BOARD_MM,
-            "letter_reference_size": LETTER_MM,
-        },
-    )
+    return render(request, "index.html")
 
 
 def _load_ezdxf_drawing_modules():

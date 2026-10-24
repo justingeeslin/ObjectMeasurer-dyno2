@@ -59,21 +59,17 @@ class MeasureEndpointTest(SimpleTestCase):
         return measurer
 
     @patch("hello.views.requests.get")
-    def test_root_without_url_shows_index_with_examples(self, requests_get):
+    def test_root_without_url_links_to_demos(self, requests_get):
         response = self.client.get("/")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["Content-Type"], "text/html; charset=utf-8")
 
         content = response.content.decode()
-        self.assertIn("Object Measurement API", content)
-        self.assertIn("Sample Links", content)
-        self.assertIn("reference_size_mm=215.9%2C279.4", content)
-        self.assertIn("measurer=reference_surface", content)
-        self.assertIn("debug=1", content)
-        self.assertIn("debug_images=1", content)
-        self.assertIn("debug_image_urls=1", content)
-        self.assertIn("data:image/png;base64,&lt;data&gt;", content)
+        self.assertIn("Garment Recycling API explorer", content)
+        self.assertIn('href="/demos/object-measurer/"', content)
+        self.assertIn('href="/demos/dxf-to-svg/"', content)
+        self.assertNotIn("Sample Links", content)
         requests_get.assert_not_called()
 
     @patch("hello.views.ObjectMeasurer")

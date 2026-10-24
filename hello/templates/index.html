@@ -3,96 +3,21 @@
 {% block content %}
 <main class="page">
   <section class="hero" aria-labelledby="page-title">
-    <p class="eyebrow">Ready for requests</p>
-    <h1 id="page-title">Measure objects from an image URL.</h1>
-    <p class="hero__copy">
-      Send a public image URL to the root endpoint and receive object dimensions
-      in centimeters. Use the examples below to try the standard response,
-      alternate measurers, custom reference sizes, structured debug data, and
-      debug images.
-    </p>
-    <ul class="hero__meta">
-      <li class="pill">Default reference: {{ default_reference_size.0 }}mm x {{ default_reference_size.1 }}mm</li>
-      <li class="pill">Letter reference: {{ letter_reference_size.0 }}mm x {{ letter_reference_size.1 }}mm</li>
-      <li class="pill">Response format: JSON</li>
-    </ul>
+    <p class="eyebrow">Garment Recycling API explorer</p>
+    <h1 id="page-title">Explore the APIs.</h1>
+    <p class="hero__copy">Choose a demo to try the options and inspect the results.</p>
   </section>
-
-  <section class="section" aria-labelledby="examples-title">
-    <h2 id="examples-title">Sample Links</h2>
-    <div class="example-grid">
-      {% for example in examples %}
-        <article class="example-card">
-          <h3>{{ example.title }}</h3>
-          <p>{{ example.description }}</p>
-          <a class="example-card__link" href="{{ example.href }}">Open example</a>
-          <pre><code>{{ example.path }}</code></pre>
-          <pre><code>{{ example.curl }}</code></pre>
-        </article>
-      {% endfor %}
-    </div>
-  </section>
-
-  <section class="section details-grid" aria-labelledby="details-title">
-    <div>
-      <h2 id="details-title">Query Parameters</h2>
-      <ul class="info-list">
-        <li><code>url</code> is required for measurement and should point to a public image.</li>
-        <li><code>measurer=object</code> uses <code>ObjectMeasurer</code>; <code>measurer=reference_surface</code> uses <code>ReferenceSurfaceMeasurer</code>.</li>
-        <li><code>reference_size_mm=width,height</code> sets the reference object size in one value.</li>
-        <li><code>reference_width_mm</code> and <code>reference_height_mm</code> can be used together instead.</li>
-        <li><code>scale</code> passes a scale value to the selected measurer.</li>
-        <li><code>debug=1</code> includes structured diagnostic metadata without raw image bytes.</li>
-        <li><code>debug_images=1</code> includes structured debug data plus base64 PNG debug images.</li>
-        <li><code>debug_image_urls=1</code> saves debug images temporarily and returns public URLs.</li>
-      </ul>
-    </div>
-
-    <div class="debug-swatch">
-      <h2>Debug Images Example</h2>
-      <p>
-        The debug-image response is designed for browser clients and inspection
-        tools. Render the image data with <code>data:image/png;base64,&lt;data&gt;</code>.
-      </p>
-      <pre><code>{
-  "width": 12.3,
-  "height": 45.6,
-  "measurements": [
-    {
-      "width": 12.3,
-      "height": 45.6,
-      "bbox": [10, 20, 120, 80]
-    }
-  ],
-  "debug_image_urls": [
-    {
-      "name": "warped",
-      "filename": "2_untitled_warped.jpg",
-      "mime_type": "image/jpeg",
-      "url": "https://example.com/debug-images/abc123/2_untitled_warped.jpg"
-    }
-  ],
-  "debug_images": {
-    "imgWarp": {
-      "mime_type": "image/png",
-      "encoding": "base64",
-      "data": "iVBORw0KGgo...",
-      "width": 640,
-      "height": 480,
-      "shape": [480, 640, 3],
-      "dtype": "uint8"
-    }
-  }
-}</code></pre>
-    </div>
-  </section>
-
-  <section class="section" aria-labelledby="source-title">
-    <h2 id="source-title">Sample Image</h2>
-    <p>
-      The examples use
-      <code class="sample-image-url">{{ example_image_url }}</code>.
-    </p>
+  <section class="section example-grid" aria-label="Demo pages">
+    <article class="example-card">
+      <h2>Object Measurer</h2>
+      <p>Measure objects from an image and explore reference sizes, measurement engines, and diagnostics.</p>
+      <a class="example-card__link" href="{% url 'measure-demo' %}">Open Object Measurer</a>
+    </article>
+    <article class="example-card">
+      <h2>DXF to SVG</h2>
+      <p>Upload a drawing, adjust scale and page layout, and preview the converted SVG.</p>
+      <a class="example-card__link" href="{% url 'dxf-demo' %}">Open DXF to SVG</a>
+    </article>
   </section>
 </main>
 {% endblock %}
