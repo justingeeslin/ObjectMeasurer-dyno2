@@ -1,0 +1,39 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{% endblock %} · Garment Recycling API explorer</title>
+  <link rel="stylesheet" href="{% static 'demos/playground.css' %}">
+  <script src="{% static 'demos/playground.js' %}" defer></script>
+</head>
+<body>
+  <header><a class="brand" href="/">mm <span>Garment Recycling API explorer</span></a><nav aria-label="Demos">
+    <a href="{% url 'measure-demo' %}" {% if request.resolver_match.url_name == 'measure-demo' %}aria-current="page"{% endif %}>Object Measurer</a>
+    <a href="{% url 'dxf-demo' %}" {% if request.resolver_match.url_name == 'dxf-demo' %}aria-current="page"{% endif %}>DXF to SVG</a>
+  </nav></header>
+  <main>
+    {% block introduction %}{% endblock %}
+    <div class="workspace">
+      <section class="panel controls" aria-labelledby="options-title">
+        <h2 id="options-title">Request options</h2>
+        {% block form %}{% endblock %}
+      </section>
+      <section class="results" aria-label="Request and results">
+        <div class="panel"><div class="section-heading"><h2>Request</h2><button type="button" id="copy-request" class="secondary">Copy cURL</button></div>
+          <pre id="request-code"></pre><p class="hint" id="request-note"></p>
+        </div>
+        <div class="panel" id="result-panel" aria-busy="false">
+          <div class="section-heading"><h2>Result</h2><span id="status" role="status" aria-live="polite">Ready</span></div>
+          <p id="empty">Choose your options, then send a request to inspect the result here.</p>
+          <p id="summary" hidden></p>
+          <div id="previews" class="previews"></div>
+          <a id="download" class="download" hidden>Download result</a>
+          <details id="response-details" hidden><summary>Response body</summary><pre id="response-code"></pre></details>
+        </div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

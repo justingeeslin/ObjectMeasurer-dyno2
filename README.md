@@ -102,6 +102,24 @@ The response will include a `debug_image_urls` array with each saved image's
 the local dyno filesystem and can disappear when the dyno restarts. Requests
 with `debug_image_urls=1` also include the structured `debug` object.
 
+## Interactive demo pages
+
+With the Django server running, open `/demos/object-measurer/` or
+`/demos/dxf-to-svg/`. Both pages call the existing API on the same server and
+include editable options, a live cURL request, HTTP status and timing, previews,
+the raw response, and downloads. Links are also available on the root landing page.
+
+The measurement demo accepts a public image URL, either measurement engine,
+default/Letter/custom reference dimensions (compact or separate parameters),
+optional scale, and all three debug flags. Debug images and the object contour
+are displayed when returned, including diagnostics on failed measurements.
+
+The DXF demo accepts a local upload with either supported field name, source
+scale presets (mm/cm/inches), custom scale, fit-to-page, margin, page dimensions,
+and every supported page unit. Choose a drawing from `test-dxf/` to experiment.
+The SVG preview fits the available screen space; download the SVG to retain its
+actual dimensions. Serve static assets as usual (`collectstatic` for production).
+
 ## DXF to SVG endpoint
 
 POST a multipart DXF upload to `/dxf-to-svg/` using a file field named `file`

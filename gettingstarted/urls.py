@@ -21,6 +21,8 @@ from django.urls import path
 import hello.views
 
 urlpatterns = [
+    path("demos/object-measurer/", hello.views.measure_demo, name="measure-demo"),
+    path("demos/dxf-to-svg/", hello.views.dxf_demo, name="dxf-demo"),
     # path("", hello.views.index, name="index"),
     path("debug-images/<path:path>", hello.views.debug_image, name="debug-image"),
     path("dxf-to-svg/", hello.views.dxf_to_svg, name="dxf-to-svg"),

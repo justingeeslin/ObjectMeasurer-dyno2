@@ -1459,6 +1459,14 @@ def dxf_to_svg(request):
     return response
 
 
+def measure_demo(request):
+    return render(request, "demos/measure.html", {"example_image_url": EXAMPLE_IMAGE_URL})
+
+
+def dxf_demo(request):
+    return render(request, "demos/dxf.html")
+
+
 def measure(request):
     image_url = request.GET.get("url")
     wants_debug_image_urls = _query_param_enabled(request.GET, DEBUG_IMAGE_URLS_PARAM)
@@ -1533,12 +1541,9 @@ def measure(request):
         measurement_kwargs["debug_path"] = str(debug_image_request_path)
         measurement_kwargs["save_debug_images"] = True
 
-    # if measurer_class == "object":
-    #     measurer = ObjectMeasurer(**measurement_kwargs)
-    # else:
-    measurer = ReferenceSurfaceMeasurer(**measurement_kwargs)
+    measurer = measurer_class(**measurement_kwargs)
 
-    data = {"measurer": "ReferenceSurfaceMeasurer"}
+    data = {"measurer": measurer_name}
 
     try:
         # Get the measurements (in mm)

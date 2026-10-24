@@ -1,0 +1,32 @@
+{% extends 'demos/base.html' %}
+{% block title %}Object Measurer{% endblock %}
+{% block introduction %}
+<p class="eyebrow">01 / Image → dimensions</p>
+<h1>Object Measurer</h1>
+<p class="intro">Measure an object against a reference surface. Compare engines, adjust the reference dimensions, and inspect each stage of detection.</p>
+<p class="endpoint"><span>GET</span> {% url 'measure' %} <small>JSON response · dimensions in millimeters</small></p>
+{% endblock %}
+{% block form %}
+<form id="demo-form" data-kind="measure" action="{% url 'measure' %}" method="get">
+  <label for="image-url">Public image URL</label>
+  <input id="image-url" name="url" type="url" value="{{ example_image_url }}" required>
+  <p class="hint">The Django server downloads this image. Use a publicly accessible HTTP(S) URL.</p>
+  <label for="measurer">Measurement engine</label>
+  <select id="measurer" name="measurer"><option value="reference_surface" selected>ReferenceSurfaceMeasurer</option><option value="object">ObjectMeasurer</option></select>
+  <label for="reference-mode">Reference dimensions</label>
+  <select id="reference-mode"><option value="default">Default poster board · 561.975 × 711.2 mm</option><option value="letter">US Letter · 215.9 × 279.4 mm</option><option value="compact">Custom · reference_size_mm</option><option value="separate">Custom · separate width / height</option></select>
+  <fieldset id="reference-fields" hidden><legend>Reference size in millimeters</legend><div class="pair">
+    <div><label for="reference-width">Width</label><input id="reference-width" type="number" min="0" step="any" value="215.9" required disabled></div>
+    <div><label for="reference-height">Height</label><input id="reference-height" type="number" min="0" step="any" value="279.4" required disabled></div>
+  </div></fieldset>
+  <label for="scale">Scale <small>optional</small></label><input id="scale" name="scale" type="number" min="0" step="any" placeholder="Engine default">
+  <p class="hint">Positive value passed directly to the selected engine.</p>
+  <fieldset><legend>Diagnostics</legend>
+    <label class="check"><input type="checkbox" name="debug" value="1" checked> Structured debug data</label>
+    <label class="check"><input type="checkbox" name="debug_images" value="1"> Base64 PNG debug images</label>
+    <label class="check"><input type="checkbox" name="debug_image_urls" value="1"> Saved debug image URLs</label>
+    <p class="hint">Image options also include debug metadata. Saved URLs are temporary; base64 images increase the response size.</p>
+  </fieldset>
+  <div class="actions"><button type="reset" class="secondary">Reset</button><button id="submit" type="submit">Measure image</button></div>
+</form>
+{% endblock %}
