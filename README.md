@@ -52,11 +52,11 @@ reference dimensions must be finite positive numbers. The top-level `width` and
 `height` mirror the first returned object, and the `measurements` array includes
 every measurement returned by the selected measurer.
 
-By default, the endpoint uses `ObjectMeasurer`. To use
-`ReferenceSurfaceMeasurer`, pass `measurer=reference_surface`:
+By default, the endpoint uses `ReferenceSurfaceMeasurer` when `measurer` is
+omitted (or set to `default`). To use `ObjectMeasurer`, pass `measurer=object`:
 
 ```term
-$ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&measurer=reference_surface"
+$ curl "http://localhost:5006/?url=https%3A%2F%2Fexample.com%2Fphoto.jpg&measurer=object"
 ```
 
 To pass a scale option to the selected measurer, use `scale`:

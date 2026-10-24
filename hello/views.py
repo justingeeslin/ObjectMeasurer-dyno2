@@ -207,14 +207,15 @@ def get_measurement_kwargs(query_params):
 
 
 def get_measurer_name(query_params):
-    value = query_params.get(MEASURER_PARAM, OBJECT_MEASURER_NAME)
+    value = query_params.get(MEASURER_PARAM, REFERENCE_SURFACE_MEASURER_NAME)
     normalized = str(value).strip().lower().replace("-", "_")
     compact = normalized.replace("_", "")
 
-    if compact in {"default", "legacy", "object", "objectmeasurer"}:
+    if compact in {"legacy", "object", "objectmeasurer"}:
         return OBJECT_MEASURER_NAME
 
     if compact in {
+        "default",
         "reference",
         "referencesurface",
         "referencesurfacemeasurer",

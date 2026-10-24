@@ -32,6 +32,8 @@ class DemoTests(SimpleTestCase):
     ):
         request_get.return_value = SimpleNamespace(ok=True, content=b"image")
         for name, engine, other in (
+            (None, reference_engine, object_engine),
+            ("default", reference_engine, object_engine),
             ("object", object_engine, reference_engine),
             ("reference_surface", reference_engine, object_engine),
         ):
@@ -42,15 +44,17 @@ class DemoTests(SimpleTestCase):
                     [SimpleNamespace(width_mm=100, height_mm=200)],
                     {"object_contour_svg": "M 0 0 L 100 0 L 100 200 Z"},
                 )
-                response = self.client.get(reverse("measure"), {
+                params = {
                     "url": "https://example.com/photo.jpg",
-                    "measurer": name,
                     "reference_size_mm": "215.9,279.4",
                     "scale": "0.5",
                     "debug": "1",
-                })
+                }
+                if name is not None:
+                    params["measurer"] = name
+                response = self.client.get(reverse("measure"), params)
                 self.assertEqual(response.status_code, 200)
-                self.assertEqual(response.json()["measurer"], name)
+                self.assertEqual(response.json()["measurer"], "object" if name == "object" else "reference_surface")
                 self.assertEqual(response.json()["width_mm"], 100)
                 self.assertIn("debug", response.json())
                 engine.assert_called_once_with(reference_size_mm=(215.9, 279.4), scale=0.5)
