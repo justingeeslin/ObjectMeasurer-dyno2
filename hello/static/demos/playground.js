@@ -71,6 +71,7 @@
     caption.textContent = label;
     figure.append(img, caption);
     $('#previews').append(figure);
+    return figure;
   }
 
   function safeImageURL(value) {
@@ -168,7 +169,21 @@
       $('#response-details').open = !response.ok;
       $('#status').textContent = `HTTP ${response.status} · ${((performance.now() - start) / 1000).toFixed(2)} s`;
       $('#status').dataset.error = String(!response.ok);
-      if (json) {
+      if (!isMeasure && response.ok && Array.isArray(json?.svgs)) {
+        const stem = $('#dxf-file').files[0].name.replace(/\.dxf$/i, '');
+        $('#summary').hidden = false;
+        $('#summary').textContent = `Pattern pieces: ${json.svgs.length}\nScale: ${response.headers.get('X-DXF-SVG-Scale')} · Page units: ${response.headers.get('X-DXF-SVG-Units')}\nEach piece includes its internal markings and has its own page layout.`;
+        download(blobURL(text, 'application/json'), `${stem}.json`, 'Download all SVGs as JSON');
+        json.svgs.forEach((markup, index) => {
+          const url = blobURL(markup, 'image/svg+xml');
+          const figure = preview(url, `Piece ${index + 1}`);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `${stem}-${index + 1}.svg`;
+          link.textContent = `Download piece ${index + 1}`;
+          figure.append(link);
+        });
+      } else if (json) {
         $('#summary').hidden = false;
         $('#summary').textContent = json.error ? [json.error, json.details].filter(Boolean).join('\n') : `Width: ${json.width_mm ?? json.width ?? '—'} mm · Height: ${json.height_mm ?? json.height ?? '—'} mm\nEngine: ${json.measurer ?? '—'} · Objects: ${json.measurements?.length ?? 0}`;
         download(blobURL(text, 'application/json'), 'measurement.json', 'Download JSON');

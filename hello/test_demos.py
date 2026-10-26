@@ -1,8 +1,71 @@
+import os
+import re
+import runpy
+import sys
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from django.conf import settings
+from django.core.management import call_command
 from django.test import SimpleTestCase, override_settings
 from django.urls import reverse
+
+
+class DemoStaticFilesTests(SimpleTestCase):
+    def command_settings(self, command):
+        environment = {
+            key: value for key, value in os.environ.items()
+            if key not in {"ENVIRONMENT", "DYNO"}
+        }
+        with patch.dict(os.environ, environment, clear=True), patch.object(
+            sys, "argv", ["manage.py", command]
+        ):
+            config = runpy.run_path(
+                str(Path(settings.BASE_DIR) / "gettingstarted" / "settings.py")
+            )
+        return {
+            key: config[key] for key in (
+                "DEBUG", "STORAGES", "WHITENOISE_USE_FINDERS",
+                "WHITENOISE_AUTOREFRESH",
+            )
+        }
+
+    def assert_pages_and_assets_load(self, hashed=False):
+        for route in ("dxf-demo", "measure-demo"):
+            with self.subTest(route=route):
+                response = self.client.get(reverse(route))
+                self.assertEqual(response.status_code, 200)
+                urls = re.findall(
+                    r'(?:href|src)="([^"]*demos/playground[^\"]*)"',
+                    response.content.decode(),
+                )
+                self.assertEqual(len(urls), 2)
+                for url in urls:
+                    if hashed:
+                        self.assertRegex(url, r"playground\.[a-f0-9]+\.(css|js)$")
+                    asset = self.client.get(url)
+                    self.assertEqual(asset.status_code, 200, url)
+                    self.assertTrue(b"".join(asset.streaming_content), url)
+                    asset.close()
+
+    def test_runserver_loads_pages_and_assets_without_a_manifest(self):
+        config = self.command_settings("runserver")
+        self.assertFalse(config["DEBUG"])
+        with tempfile.TemporaryDirectory() as static_root:
+            with override_settings(STATIC_ROOT=static_root, **config):
+                self.assert_pages_and_assets_load()
+                self.assertFalse((Path(static_root) / "staticfiles.json").exists())
+
+    def test_production_loads_pages_and_hashed_assets_after_collectstatic(self):
+        config = self.command_settings("gunicorn")
+        self.assertFalse(config["DEBUG"])
+        with tempfile.TemporaryDirectory() as static_root:
+            with override_settings(STATIC_ROOT=static_root, **config):
+                call_command("collectstatic", interactive=False, verbosity=0)
+                self.assertTrue((Path(static_root) / "staticfiles.json").is_file())
+                self.assert_pages_and_assets_load(hashed=True)
 
 
 @override_settings(STORAGES={

@@ -2,8 +2,8 @@
 {% block title %}DXF to SVG{% endblock %}
 {% block introduction %}
 <p class="eyebrow">02 / Drawing → vector</p><h1>DXF to SVG</h1>
-<p class="intro">Convert a drawing into a clean SVG. Explore source scale, page dimensions, and fit-to-page behavior, then preview and download the output.</p>
-<p class="endpoint"><span>POST</span> {% url 'dxf-to-svg' %} <small>Multipart upload · SVG response</small></p>
+<p class="intro">Convert a drawing into a clean SVG or separate SVG shapes for pattern pieces. Explore source scale, page dimensions, and fit-to-page behavior, then preview and download the output.</p>
+<p class="endpoint"><span>POST</span> {% url 'dxf-to-svg' %} <small>Multipart upload · SVG or JSON response</small></p>
 {% endblock %}
 {% block form %}
 <form id="demo-form" data-kind="dxf" action="{% url 'dxf-to-svg' %}" method="post" enctype="multipart/form-data">
@@ -13,6 +13,8 @@
   <label for="source-units">Source scale preset</label><select id="source-units"><option value="1">Millimeters · scale 1</option><option value="10">Centimeters · scale 10</option><option value="25.4">Inches · scale 25.4</option><option value="custom">Custom scale</option></select>
   <label for="scale">Scale</label><input id="scale" name="scale" type="number" min="0" step="any" value="1" required>
   <p class="hint">Use 1, 10, or 25.4 to normalize mm, cm, or inch drawing coordinates to millimeters. Fit-to-page can override this scale.</p>
+  <label class="check"><input type="checkbox" name="separate_shapes" value="true"> Return each pattern piece as an independent SVG</label>
+  <p class="hint">Returns a JSON array of SVGs with a page for each piece. Internal markings stay with their outlines.</p>
   <fieldset><legend>Page layout</legend>
     <label for="units">Page units</label><select id="units" name="units"><option>px</option><option>mm</option><option>cm</option><option>in</option><option>inch</option><option>pt</option></select>
     <div class="pair"><div><label for="page-width">Page width</label><input id="page-width" name="page_width" type="number" min="0" step="any" value="0" required></div><div><label for="page-height">Page height</label><input id="page-height" name="page_height" type="number" min="0" step="any" value="0" required></div></div>
