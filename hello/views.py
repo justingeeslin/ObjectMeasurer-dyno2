@@ -1,4 +1,5 @@
 import base64
+from copy import deepcopy
 from dataclasses import dataclass
 import html
 import inspect
@@ -55,6 +56,7 @@ DXF_MARGIN_PARAM = "margin"
 DXF_PAGE_WIDTH_PARAM = "page_width"
 DXF_PAGE_HEIGHT_PARAM = "page_height"
 DXF_UNITS_PARAM = "units"
+DXF_SEPARATE_SHAPES_PARAM = "separate_shapes"
 DXF_DEFAULT_SCALE = 1.0
 DXF_DEFAULT_MARGIN = 0.0
 DXF_DEFAULT_PAGE_SIZE = 0.0
@@ -115,6 +117,7 @@ class DxfSvgOptions:
     page_width: float = DXF_DEFAULT_PAGE_SIZE
     page_height: float = DXF_DEFAULT_PAGE_SIZE
     units: str = DXF_DEFAULT_UNITS
+    separate_shapes: bool = False
 
 
 def _parse_positive_float(value, param_name):
@@ -331,6 +334,9 @@ def get_dxf_svg_options(request):
             DXF_DEFAULT_PAGE_SIZE,
         ),
         units=units,
+        separate_shapes=_parse_dxf_bool_param(
+            request, DXF_SEPARATE_SHAPES_PARAM, False
+        ),
     )
 
 
@@ -717,7 +723,9 @@ def _remove_dxf_text_entities(doc):
 def _format_dxf_svg_number(value):
     if math.isclose(value, 0.0, abs_tol=DXF_SVG_POINT_CLOSE_TOLERANCE):
         value = 0.0
-    return _format_svg_number(value)
+    # Separate SVGs retain source coordinates under a placement transform.
+    # Keep enough precision for small pieces far from the drawing origin.
+    return f"{float(value):.15g}"
 
 
 def _format_svg_points(points):
@@ -748,10 +756,12 @@ def _svg_points_equal(first, second):
     return math.isclose(
         first[0],
         second[0],
+        rel_tol=0.0,
         abs_tol=DXF_SVG_POINT_CLOSE_TOLERANCE,
     ) and math.isclose(
         first[1],
         second[1],
+        rel_tol=0.0,
         abs_tol=DXF_SVG_POINT_CLOSE_TOLERANCE,
     )
 
@@ -782,6 +792,10 @@ def _canonical_svg_polygon(points):
 
 
 def _svg_polygon_area(points):
+    if not points:
+        return 0.0
+    origin_x, origin_y = points[0]
+    points = [(x - origin_x, y - origin_y) for x, y in points]
     return abs(
         sum(
             start[0] * end[1] - end[0] * start[1]
@@ -1048,11 +1062,145 @@ def _deduplicate_svg_polygons(entities):
             seen.add(key)
 
 
-def _consolidate_svg_straight_shapes(entities, curved_boundaries=None):
+def _consolidate_svg_straight_shapes(
+    entities, curved_boundaries=None, preserve_metadata=False
+):
     _consolidate_svg_polylines(entities)
     _remove_internal_svg_piece_shapes(entities, curved_boundaries)
     _deduplicate_svg_polygons(entities)
-    _remove_svg_dxf_metadata(entities)
+    if not preserve_metadata:
+        _remove_svg_dxf_metadata(entities)
+
+
+def _group_svg_pattern_pieces(entities, curved_boundaries, shape_paths):
+    from ezdxf import edgeminer
+
+    groups = []
+    blocks = {}
+    loose = []
+    outlines = []
+    open_by_layer = {}
+    for index, element in enumerate(entities):
+        block = element.get(DXF_SVG_PATTERN_PIECE_ATTRIBUTE)
+        if block:
+            blocks.setdefault(block, []).append((index, element))
+            continue
+
+        if element.tag in {"polygon", "polyline"}:
+            points = _parse_svg_points(element.get("points", ""))
+        else:
+            points = [
+                (point.x, point.y)
+                for path in shape_paths.get(id(element), [])
+                for point in path.flattening(DXF_SVG_CURVE_FLATTENING_DISTANCE)
+            ]
+        boundary = (
+            points if element.tag == "polygon"
+            else curved_boundaries.get(id(element), [])
+        )
+        item = {
+            "members": [(index, element)],
+            "points": points,
+            "layer": element.get(DXF_SVG_LAYER_ATTRIBUTE, ""),
+            "closed": bool(boundary),
+        }
+        loose.append(item)
+        if boundary:
+            outlines.append({**item, "points": boundary})
+        elif len(points) >= 2:
+            open_by_layer.setdefault(item["layer"], []).append(item)
+
+    # Curved outlines can also be assembled from several connected entities.
+    open_chains = []
+    for layer, items in open_by_layer.items():
+        edges = [
+            edgeminer.make_edge(item["points"][0], item["points"][-1], payload=item)
+            for item in items
+        ]
+        deposit = edgeminer.Deposit(edges, gap_tol=DXF_SVG_POINT_CLOSE_TOLERANCE)
+        for chain in edgeminer.find_all_simple_chains(deposit):
+            members = [member for edge in chain for member in edge.payload["members"]]
+            open_chains.append(members)
+            if not edgeminer.is_loop(chain, gap_tol=DXF_SVG_POINT_CLOSE_TOLERANCE):
+                continue
+            points = []
+            for edge in chain:
+                segment = edge.payload["points"]
+                points.extend(reversed(segment) if edge.is_reverse else segment)
+            outlines.append({
+                "members": members, "points": _clean_svg_points(points, closed=True),
+                "layer": layer, "closed": True,
+            })
+
+    for outline in outlines:
+        outline["area"] = _svg_polygon_area(outline["points"])
+        outline["bbox"] = _svg_polygon_bbox(outline["points"])
+
+    def contains(outline, points):
+        return (
+            bool(points)
+            and _svg_bbox_contains(outline["bbox"], _svg_polygon_bbox(points))
+            and all(_svg_polygon_contains_point(outline["points"], p) for p in points)
+        )
+
+    outer_outlines = [
+        inner for inner in outlines
+        if not any(
+            outer["layer"] == inner["layer"]
+            and outer["area"] > inner["area"]
+            and contains(outer, inner["points"])
+            for outer in outlines
+        )
+    ]
+    assigned = set()
+    for outline in outer_outlines:
+        group = list(outline["members"])
+        outline["group"] = group
+        groups.append(group)
+        assigned.update(index for index, _ in group)
+
+    for item in loose:
+        index, element = item["members"][0]
+        if index in assigned:
+            continue
+        candidates = [
+            outline for outline in outer_outlines
+            if (not item["closed"] or item["layer"] == outline["layer"])
+            and contains(outline, item["points"])
+        ]
+        if not candidates and not item["closed"]:
+            # Notches may extend outside a piece but touch its cutting outline.
+            candidates = [
+                outline for outline in outer_outlines
+                if item["layer"] == outline["layer"]
+                and any(
+                    _svg_point_is_on_segment(point, start, end)
+                    for point in item["points"]
+                    for start, end in zip(
+                        outline["points"], outline["points"][1:] + outline["points"][:1]
+                    )
+                )
+            ]
+        if candidates:
+            owner = min(candidates, key=lambda outline: (
+                outline["layer"] != item["layer"], outline["area"]
+            ))
+            owner["group"].append((index, element))
+            assigned.add(index)
+
+    for chain in open_chains:
+        remaining = [(index, element) for index, element in chain if index not in assigned]
+        if remaining:
+            groups.append(remaining)
+            assigned.update(index for index, _ in remaining)
+    for item in loose:
+        if item["members"][0][0] not in assigned:
+            groups.append(item["members"])
+    groups.extend(blocks.values())
+    return [
+        [element for _, element in sorted(group)]
+        for group in sorted(groups, key=lambda group: min(index for index, _ in group))
+    ]
 
 
 def _format_dxf_svg_path(path, path_command, close=False):
@@ -1100,10 +1248,12 @@ def _dxf_svg_points_are_closed(points):
     return math.isclose(
         start.x,
         end.x,
+        rel_tol=0.0,
         abs_tol=DXF_SVG_POINT_CLOSE_TOLERANCE,
     ) and math.isclose(
         start.y,
         end.y,
+        rel_tol=0.0,
         abs_tol=DXF_SVG_POINT_CLOSE_TOLERANCE,
     )
 
@@ -1134,6 +1284,8 @@ def _build_shape_svg_backend(
             super().__init__(page, settings)
             self._straight_shapes_consolidated = False
             self._curved_boundaries = {}
+            self._shape_paths = {}
+            self._preserve_dxf_metadata = False
             self.root.remove(self.background)
             self.root.set(
                 "viewBox",
@@ -1153,6 +1305,7 @@ def _build_shape_svg_backend(
                 _consolidate_svg_straight_shapes(
                     self.entities,
                     self._curved_boundaries,
+                    preserve_metadata=self._preserve_dxf_metadata,
                 )
                 self._straight_shapes_consolidated = True
             return super().get_xml_root_element()
@@ -1232,6 +1385,7 @@ def _build_shape_svg_backend(
                     return
 
                 element = self.entities[-1]
+                self._shape_paths[id(element)] = [path]
                 self.add_dxf_metadata(element, properties)
                 if path.is_closed and not path.has_sub_paths:
                     boundary = _clean_svg_points(
@@ -1254,10 +1408,118 @@ def _build_shape_svg_backend(
         def draw_filled_polygon(self, points, properties):
             self.add_filled_shape("polygon", points.vertices(), properties)
 
+        def draw_filled_paths(self, paths, properties):
+            paths = list(paths)
+            element_count = len(self.entities)
+            super().draw_filled_paths(paths, properties)
+            if len(self.entities) > element_count:
+                element = self.entities[-1]
+                self._shape_paths[id(element)] = paths
+                self.add_dxf_metadata(element, properties)
+                boundaries = [
+                    _clean_svg_points(
+                        [(point.x, point.y) for point in subpath.flattening(
+                            DXF_SVG_CURVE_FLATTENING_DISTANCE
+                        )], closed=True,
+                    )
+                    for path in paths
+                    for subpath in path.sub_paths()
+                    if subpath.is_closed
+                ]
+                if boundaries:
+                    self._curved_boundaries[id(element)] = max(
+                        boundaries, key=_svg_polygon_area
+                    )
+
     class ShapeSvgBackend(svg_module.SVGBackend):
         @staticmethod
         def make_backend(page, settings):
             return ShapeSvgRenderBackend(page, settings)
+
+        def get_separate_strings(self, page, settings):
+            from ezdxf.addons.drawing import layout
+            from ezdxf.math import BoundingBox2d
+            from ezdxf.path import bbox as path_bbox
+
+            # Replay in drawing coordinates so cleanup happens before each shape
+            # receives its own page placement and scale.
+            renderer = self.make_backend(
+                layout.Page(1, 1),
+                layout.Settings(output_coordinate_space=1),
+            )
+            renderer._preserve_dxf_metadata = True
+            self.player().replay(renderer)
+            root = renderer.get_xml_root_element()
+            svgs = []
+            groups = _group_svg_pattern_pieces(
+                renderer.entities, renderer._curved_boundaries, renderer._shape_paths
+            )
+            for elements in groups:
+                bounds = BoundingBox2d()
+                for element in elements:
+                    if element.tag in {"polygon", "polyline"}:
+                        bounds.extend(_parse_svg_points(element.get("points", "")))
+                    else:
+                        path_bounds = path_bbox(
+                            renderer._shape_paths.get(id(element), [])
+                        )
+                        if path_bounds.has_data:
+                            bounds.extend(path_bounds.rect_vertices())
+                if not bounds.has_data:
+                    continue
+
+                # Horizontal and vertical lines also need a nonzero viewport.
+                minimum_extent = 0.1 / settings.scale
+                lower, upper = bounds.extmin, bounds.extmax
+                if bounds.size.x == 0:
+                    bounds.extend([
+                        (lower.x - minimum_extent / 2, lower.y),
+                        (upper.x + minimum_extent / 2, upper.y),
+                    ])
+                if bounds.size.y == 0:
+                    bounds.extend([
+                        (lower.x, lower.y - minimum_extent / 2),
+                        (upper.x, upper.y + minimum_extent / 2),
+                    ])
+
+                shape_layout = layout.Layout(bounds, flip_y=True)
+                final_page = shape_layout.get_final_page(page, settings)
+                final_page.width = max(0.1, final_page.width)
+                final_page.height = max(0.1, final_page.height)
+                shape_settings = layout.Settings(
+                    scale=settings.scale,
+                    fit_page=settings.fit_page,
+                    output_coordinate_space=max(
+                        final_page.width_in_mm, final_page.height_in_mm
+                    ),
+                )
+                matrix = shape_layout.get_placement_matrix(
+                    final_page, settings=shape_settings
+                )
+                output = self.make_backend(final_page, shape_settings)
+                svg_root = output.get_xml_root_element()
+                svg_root.remove(svg_root.find("defs"))
+                svg_root.insert(0, deepcopy(root.find("defs")))
+                # SVG matrices use the two basis vectors followed by translation.
+                matrix_values = (
+                    matrix[0, 0], matrix[0, 1], matrix[1, 0],
+                    matrix[1, 1], matrix[3, 0], matrix[3, 1],
+                )
+                output.entities.set(
+                    "transform",
+                    "matrix(" + " ".join(
+                        f"{value:.15g}" for value in matrix_values
+                    ) + ")",
+                )
+                for element in elements:
+                    shape = deepcopy(element)
+                    shape.set("vector-effect", "non-scaling-stroke")
+                    output.entities.append(shape)
+                _remove_svg_dxf_metadata(output.entities)
+                svgs.append(ET.tostring(
+                    svg_root, encoding="unicode", xml_declaration=True
+                ))
+            return svgs
 
     return ShapeSvgBackend()
 
@@ -1297,6 +1559,9 @@ def render_dxf_path_to_svg(dxf_path, options):
         scale=options.scale,
         fit_page=options.fit_page,
     )
+    if options.separate_shapes:
+        return backend.get_separate_strings(page, settings)
+
     render_box = backend.player().bbox()
     final_page = layout.Layout(render_box, flip_y=True).get_final_page(page, settings)
     settings.output_coordinate_space = max(
@@ -1350,7 +1615,7 @@ def dxf_to_svg(request):
 
     try:
         options = get_dxf_svg_options(request)
-        svg_markup = convert_uploaded_dxf_to_svg(uploaded_file, options)
+        result = convert_uploaded_dxf_to_svg(uploaded_file, options)
     except BadDxfConversionOption as exc:
         return JsonResponse(
             {"error": "Invalid DXF conversion option", "details": str(exc)},
@@ -1373,9 +1638,14 @@ def dxf_to_svg(request):
             status=500,
         )
 
-    response = HttpResponse(svg_markup, content_type="image/svg+xml; charset=utf-8")
+    filename = _svg_download_name(uploaded_file)
+    if options.separate_shapes:
+        response = JsonResponse({"svgs": result})
+        filename = f"{Path(filename).stem}.json"
+    else:
+        response = HttpResponse(result, content_type="image/svg+xml; charset=utf-8")
     response["Content-Disposition"] = (
-        f'inline; filename="{_svg_download_name(uploaded_file)}"'
+        f'inline; filename="{filename}"'
     )
     response["X-DXF-SVG-Scale"] = str(options.scale)
     response["X-DXF-SVG-Units"] = options.units

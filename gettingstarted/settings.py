@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 import os
 import secrets
+import sys
 import tempfile
 from pathlib import Path
 
@@ -199,6 +200,14 @@ USE_TZ = True
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATIC_URL = "static/"
 
+# A normal `manage.py runserver` should work without a collectstatic build,
+# including when ENVIRONMENT is unset and DEBUG remains False.
+USE_SOURCE_STATIC_FILES = DEBUG or "runserver" in sys.argv
+WHITENOISE_USE_FINDERS = USE_SOURCE_STATIC_FILES
+WHITENOISE_AUTOREFRESH = USE_SOURCE_STATIC_FILES
+if USE_SOURCE_STATIC_FILES:
+    WHITENOISE_MAX_AGE = 0
+
 DEBUG_IMAGE_ROOT = Path(
     os.environ.get(
         "DEBUG_IMAGE_ROOT",
@@ -208,10 +217,12 @@ DEBUG_IMAGE_ROOT = Path(
 DEBUG_IMAGE_URL = "debug-images/"
 
 STORAGES = {
-    # Enable WhiteNoise's GZip (and Brotli, if installed) compression of static assets:
-    # https://whitenoise.readthedocs.io/en/latest/django.html#add-compression-and-caching-support
     "staticfiles": {
-        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+        "BACKEND": (
+            "django.contrib.staticfiles.storage.StaticFilesStorage"
+            if USE_SOURCE_STATIC_FILES
+            else "whitenoise.storage.CompressedManifestStaticFilesStorage"
+        ),
     },
 }
 

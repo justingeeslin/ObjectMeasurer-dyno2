@@ -13,6 +13,10 @@ This application supports the tutorials for both the [Cedar and Fir generations]
 python manage.py runserver
 ```
 
+The development server serves source CSS and JavaScript without requiring
+`collectstatic`, even when `ENVIRONMENT` is unset. Production servers use the
+hashed static-file manifest built by `python manage.py collectstatic --noinput`.
+
 ## Development 
 
 Refresh all deps; gets the latest commits.
@@ -160,6 +164,8 @@ Scaling and layout options can be sent as multipart fields or query parameters:
 - `page_width` and `page_height`: non-negative floats, default to `0` for auto
   page sizing
 - `units`: one of `px`, `mm`, `cm`, `in`, `inch`, or `pt`; defaults to `px`
+- `separate_shapes`: boolean, defaults to `false`; returns JSON containing a
+  `svgs` array instead of one combined SVG when enabled
 
 DXF files do not always declare their source units. For files whose drawing
 units are millimeters, centimeters, or inches, use `scale=1`, `scale=10`, or
@@ -174,6 +180,36 @@ $ curl -X POST "http://localhost:5006/dxf-to-svg/" \
     -F "margin=8" \
     -o drawing.svg
 ```
+
+To export independent pattern pieces with their internal markings:
+
+```term
+$ curl -X POST "http://localhost:5006/dxf-to-svg/" \
+    -F "file=@drawing.dxf" \
+    -F "separate_shapes=true" \
+    -F "scale=25.4" \
+    -o pieces.json
+```
+
+The response has the form `{"svgs": ["<svg ...>...</svg>", "<svg ...>...</svg>"]}`
+(each string also includes an XML declaration). Every entry is a complete SVG
+with its own styles, millimeter coordinates, origin, and page bounds. Scale,
+margin, page dimensions, and fit-to-page settings apply independently to each
+piece. Leave `fit_page=false` to preserve relative pattern sizes. Use the
+appropriate source scale (`25.4` above is for inches).
+
+Pieces are split after the same outline cleanup used for combined output.
+Entities in the same inserted DXF pattern block stay together. For drawings
+without pattern blocks, closed outlines (including loops assembled from curved
+segments) are grouped with enclosed markings and attached notches. Nested
+outlines on different grading layers remain separate pieces; markings prefer
+the enclosing outline on their own layer. Unassigned connected geometry is
+returned as a separate SVG so it is retained.
+
+A drawing with no renderable shapes returns `{"svgs": []}`. Array order
+follows the cleaned drawing output. A client can associate a desired quantity
+with each array entry without duplicating the SVG markup. The demo provides
+individual SVG downloads and a download of the complete JSON response.
 
 ## Endpoint end-to-end test
 
